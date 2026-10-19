@@ -1,39 +1,81 @@
-import { defineConfig, loadEnv, type ProxyOptions } from 'vite';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { defineConfig, loadEnv, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import { POST as generateHandler } from './api/generate.ts';
 
-/** Muss mit DEV_PROXY_PATH in src/config.ts übereinstimmen. */
-const DEV_PROXY_PATH = '/n8n-webhook';
+/** Serverseitige Variablen für api/generate.ts (ohne VITE_-Präfix, landen nie im Browser-Bundle). */
+const SERVER_ENV_KEYS = [
+  'N8N_WEBHOOK_URL',
+  'N8N_AUTH_HEADER_NAME',
+  'N8N_AUTH_HEADER_VALUE',
+  'N8N_BASIC_AUTH_USER',
+  'N8N_BASIC_AUTH_PASSWORD',
+  'SUPABASE_URL',
+  'SUPABASE_PUBLISHABLE_KEY',
+  'VITE_SUPABASE_URL',
+  'VITE_SUPABASE_PUBLISHABLE_KEY',
+];
+
+/** Werden beim Nachbauen der Anfrage neu gesetzt bzw. sind nur für die lokale Verbindung relevant. */
+const HOP_BY_HOP_HEADERS = new Set(['host', 'connection', 'content-length', 'transfer-encoding', 'keep-alive']);
+
+async function readBody(req: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks);
+}
+
+async function sendResponse(res: ServerResponse, response: Response): Promise<void> {
+  res.statusCode = response.status;
+  response.headers.forEach((value, key) => res.setHeader(key, value));
+  res.end(Buffer.from(await response.arrayBuffer()));
+}
 
 /**
- * Im Dev-Server wird der Webhook serverseitig weitergeleitet. So greift lokal keine
- * CORS-Sperre, und die App sieht die echte Antwort von n8n (z. B. HTTP 404 bei inaktivem Test-Webhook).
+ * Führt im Dev-Server dieselbe Serverfunktion aus wie Vercel in Produktion,
+ * damit lokal und online identisch getestet wird.
  */
-function webhookProxy(webhookUrl: string | undefined): Record<string, ProxyOptions> | undefined {
-  if (!webhookUrl) return undefined;
-  let target: URL;
-  try {
-    target = new URL(webhookUrl);
-  } catch {
-    console.warn(`[ai-image-studio] VITE_N8N_WEBHOOK_URL ist keine gültige URL: ${webhookUrl}`);
-    return undefined;
-  }
+function apiDevServer(): Plugin {
   return {
-    [DEV_PROXY_PATH]: {
-      target: target.origin,
-      changeOrigin: true,
-      rewrite: () => target.pathname + target.search,
-      // KI-Generierung kann dauern – gleiches Limit wie REQUEST_TIMEOUT_MS in src/config.ts.
-      timeout: 180_000,
-      proxyTimeout: 180_000,
+    name: 'ai-image-studio:api-dev-server',
+    configureServer(server) {
+      server.middlewares.use('/api/generate', (req, res) => {
+        void (async () => {
+          if (req.method !== 'POST') {
+            res.statusCode = 405;
+            res.setHeader('allow', 'POST');
+            res.end();
+            return;
+          }
+          const headers = new Headers();
+          for (const [key, value] of Object.entries(req.headers)) {
+            if (typeof value === 'string' && !HOP_BY_HOP_HEADERS.has(key)) headers.set(key, value);
+          }
+          const request = new Request(`http://localhost${req.originalUrl ?? '/api/generate'}`, {
+            method: 'POST',
+            headers,
+            body: new Uint8Array(await readBody(req)),
+          });
+          await sendResponse(res, await generateHandler(request));
+        })().catch((error: unknown) => {
+          server.config.logger.error(`[api/generate] ${String(error)}`);
+          if (!res.headersSent) res.statusCode = 500;
+          res.end();
+        });
+      });
     },
   };
 }
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), 'VITE_');
+  // Serverseitige Werte aus .env / .env.local für die lokale Serverfunktion bereitstellen.
+  const env = loadEnv(mode, process.cwd(), '');
+  for (const key of SERVER_ENV_KEYS) {
+    if (env[key] && !process.env[key]) process.env[key] = env[key];
+  }
+
   return {
-    plugins: [react(), tailwindcss()],
-    server: { proxy: webhookProxy(env.VITE_N8N_WEBHOOK_URL?.trim()) },
+    plugins: [react(), tailwindcss(), apiDevServer()],
   };
 });

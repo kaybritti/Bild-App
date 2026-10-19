@@ -1,5 +1,6 @@
-import { IS_TEST_WEBHOOK, REQUEST_TIMEOUT_MS, WEBHOOK_URL, type SupportedMimeType } from '../config';
+import { GENERATE_ENDPOINT, REQUEST_TIMEOUT_MS, type SupportedMimeType } from '../config';
 import { detectImageType } from '../utils/validateImage';
+import { getAccessToken } from './authService';
 
 /** Fehler mit einer Nachricht, die direkt in der Oberfläche angezeigt werden kann. */
 export class GenerationError extends Error {
@@ -14,33 +15,30 @@ export interface GeneratedImage {
   mimeType: SupportedMimeType;
 }
 
-const WEBHOOK_HINT = IS_TEST_WEBHOOK
-  ? 'Beim Test-Webhook muss in n8n zuerst „Listen for test event“ bzw. „Execute workflow“ geklickt werden.'
-  : 'Bitte prüfen, ob der Workflow in n8n aktiviert ist.';
-
+/** Ersatztexte, falls die Serverfunktion selbst nicht antwortet (z. B. Plattform-Fehler von Vercel). */
 function messageForStatus(status: number): string {
-  if (status === 404) {
-    return `Der n8n-Webhook ist nicht registriert oder nicht aktiv (HTTP 404). ${WEBHOOK_HINT}`;
-  }
-  if (status === 401 || status === 403) {
-    return `Der Zugriff auf den Webhook wurde verweigert (HTTP ${status}).`;
-  }
-  if (status === 413) {
-    return 'Die Bilder sind zu groß für den Webhook (HTTP 413). Bitte kleinere Dateien verwenden.';
-  }
-  if (status === 429) {
-    return 'Zu viele Anfragen (HTTP 429). Bitte einen Moment warten und erneut versuchen.';
-  }
-  if (status === 502 || status === 503 || status === 504) {
-    return `Der Dienst ist gerade nicht verfügbar oder hat zu lange gebraucht (HTTP ${status}). Bitte später erneut versuchen.`;
-  }
-  if (status >= 500) {
-    return `Im n8n-Workflow ist ein Fehler aufgetreten (HTTP ${status}). Bitte später erneut versuchen.`;
-  }
-  if (status >= 400) {
-    return `Der Workflow konnte die Bilder nicht verarbeiten (HTTP ${status}).`;
-  }
+  if (status === 401) return 'Deine Sitzung ist abgelaufen. Bitte melde dich erneut an.';
+  if (status === 404) return 'Die Serverfunktion wurde nicht gefunden (HTTP 404).';
+  if (status === 413) return 'Die Bilder sind zusammen zu groß (HTTP 413). Bitte kleinere Dateien verwenden.';
+  if (status === 429) return 'Zu viele Anfragen (HTTP 429). Bitte einen Moment warten und erneut versuchen.';
+  if (status === 504) return 'Die Generierung hat zu lange gedauert (HTTP 504). Bitte erneut versuchen.';
+  if (status >= 500) return `Auf dem Server ist ein Fehler aufgetreten (HTTP ${status}). Bitte später erneut versuchen.`;
   return `Die Bildgenerierung ist fehlgeschlagen (HTTP ${status}).`;
+}
+
+/** Die Serverfunktion liefert Fehler als JSON { error } mit fertiger Nachricht. */
+async function readErrorMessage(response: Response): Promise<string> {
+  if (response.headers.get('content-type')?.includes('application/json')) {
+    try {
+      const data: unknown = await response.json();
+      if (data && typeof data === 'object' && 'error' in data && typeof data.error === 'string' && data.error) {
+        return data.error;
+      }
+    } catch {
+      // Ungültiges JSON – auf den Standardtext zurückfallen.
+    }
+  }
+  return messageForStatus(response.status);
 }
 
 function parseImageContentType(header: string | null): SupportedMimeType | null {
@@ -50,14 +48,13 @@ function parseImageContentType(header: string | null): SupportedMimeType | null 
 }
 
 /**
- * Sendet Bild1 und Bild2 als multipart/form-data an den n8n-Webhook
- * und liefert das generierte Bild als Blob zurück.
+ * Sendet Bild1 und Bild2 als multipart/form-data an die eigene Serverfunktion,
+ * die sie an den n8n-Webhook weiterleitet, und liefert das generierte Bild als Blob zurück.
  */
 export async function generateImage(bild1: File, bild2: File, signal?: AbortSignal): Promise<GeneratedImage> {
-  if (!WEBHOOK_URL) {
-    throw new GenerationError(
-      'Die Webhook-URL ist nicht konfiguriert. Bitte VITE_N8N_WEBHOOK_URL in der .env-Datei setzen und die App neu starten.',
-    );
+  const token = await getAccessToken();
+  if (!token) {
+    throw new GenerationError('Deine Sitzung ist abgelaufen. Bitte melde dich erneut an.');
   }
 
   const body = new FormData();
@@ -87,16 +84,18 @@ export async function generateImage(bild1: File, bild2: File, signal?: AbortSign
     let response: Response;
     try {
       // Content-Type wird bewusst nicht gesetzt – der Browser ergänzt die Multipart-Boundary.
-      response = await fetch(WEBHOOK_URL, { method: 'POST', body, signal: controller.signal });
+      response = await fetch(GENERATE_ENDPOINT, {
+        method: 'POST',
+        body,
+        headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal,
+      });
     } catch {
-      throw failureFor(
-        `Der n8n-Webhook ist nicht erreichbar. Bitte die Internetverbindung prüfen. ${WEBHOOK_HINT} ` +
-          'Eine weitere mögliche Ursache ist eine fehlende CORS-Freigabe im Webhook.',
-      );
+      throw failureFor('Der Server ist nicht erreichbar. Bitte die Internetverbindung prüfen und erneut versuchen.');
     }
 
     if (!response.ok) {
-      throw new GenerationError(messageForStatus(response.status));
+      throw new GenerationError(await readErrorMessage(response));
     }
 
     const contentType = response.headers.get('content-type');

@@ -105,6 +105,20 @@ export async function signOut(): Promise<void> {
 }
 
 /**
+ * Liefert das Zugriffstoken der aktuellen Sitzung für die eigene Serverfunktion.
+ * getSession() erneuert ein abgelaufenes Token automatisch; null bedeutet: nicht (mehr) angemeldet.
+ */
+export async function getAccessToken(): Promise<string | null> {
+  if (!supabase) return null;
+  try {
+    const { data } = await supabase.auth.getSession();
+    return data.session?.access_token ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Meldet den aktuellen Nutzer sofort (gespeicherte Session) und bei jeder Änderung.
  * Gibt eine Funktion zum Abbestellen zurück.
  */

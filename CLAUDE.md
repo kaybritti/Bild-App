@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-AI Image Studio: a React 19 + TypeScript + Vite 8 + Tailwind CSS v4 single-page app. Users upload two images (Bild1 = person, Bild2 = garment), the app POSTs them to an n8n webhook, and n8n returns a generated image that the app displays and offers for download. All image generation happens in n8n. Never add mock or local generation as a fallback.
+AI Image Studio: a React 19 + TypeScript + Vite 8 + Tailwind CSS v4 single-page app. Users upload two images (Bild1 = person, Bild2 = garment), the app POSTs them to its own server function `api/generate.ts` (Vercel), which forwards them to an n8n webhook, and n8n returns a generated image that the app displays and offers for download. All image generation happens in n8n. Never add mock or local generation as a fallback.
 
 The app is only usable after signing in via Supabase Auth (email + password, with name captured at sign-up and email confirmation required).
 
@@ -17,7 +17,7 @@ npm install
 npm run dev        # Vite dev server, http://localhost:5173
 npm run build      # tsc -b (type check) + vite build -> dist/
 npm run typecheck  # tsc -b only
-npm run preview    # serve dist/
+npm run preview    # serve dist/ (static only: /api/generate is not available there)
 ```
 
 There is no test runner and no linter configured. Verify changes with `npm run build`.
@@ -25,20 +25,22 @@ There is no test runner and no linter configured. Verify changes with `npm run b
 ## Git
 
 - Remote `origin` is https://github.com/kaybritti/Bild-App, default branch `main`.
-- `node_modules` and `dist` are gitignored. `.env` is committed on purpose so hosted builds (Vercel) get the webhook URL and Supabase settings; it must only ever contain public values, never secrets.
+- `node_modules` and `dist` are gitignored. `.env` is committed on purpose so hosted builds (Vercel) get the webhook URL and Supabase settings; it must only ever contain public values, never secrets. Secrets go in `.env.local` (gitignored via `.env.*`) and in Vercel's environment variables.
 - The commit identity is set repo-locally: `kaybritti <bmbartel@gmx.de>`.
 - Pushing over HTTPS goes through the Git Credential Manager. When no login is cached, `git push` waits silently for a browser sign-in, so a non-interactive push can appear to hang until the user signs in.
 
 ## Configuration
 
-- `VITE_N8N_WEBHOOK_URL` is set in `.env` (committed). `.env.example` is the template. An environment variable set in Vercel overrides it.
-- The value is inlined at build time and visible in the browser, so never put secrets in it.
-- Restart the dev server after changing `.env`.
-- The current URL is the n8n **production** webhook (`/webhook/…`). It only responds while the workflow is activated in n8n. The **test** variant (`/webhook-test/…`) only accepts one request after "Execute workflow" / "Listen for test event" is clicked. Either way, an unregistered webhook returns HTTP 404 JSON with no CORS headers. The UI shows a test-mode hint only when the URL contains `/webhook-test/`.
-- **Dev proxy:** under `npm run dev`, `src/config.ts` swaps `WEBHOOK_URL` for the same-origin path `/n8n-webhook`, and `vite.config.ts` proxies that path server-side to `VITE_N8N_WEBHOOK_URL`.
-  - The proxy avoids CORS locally and lets the app see real n8n status codes. Without it, the CORS-less 404 surfaced in the browser only as a generic network error (fetch `TypeError`).
-  - The production build calls the webhook directly, so CORS must be configured in n8n or on the host.
-  - The path constant `/n8n-webhook` is duplicated in both files and must stay in sync. The 180 s proxy timeout mirrors `REQUEST_TIMEOUT_MS`.
+- The browser never sees the n8n webhook URL or its credentials. Both exist only server-side (no `VITE_` prefix):
+  - `N8N_WEBHOOK_URL` lives in `.env` (committed, public).
+  - The webhook credentials live in `.env.local` and in Vercel. Use either `N8N_AUTH_HEADER_NAME` + `N8N_AUTH_HEADER_VALUE` (n8n Header Auth) or `N8N_BASIC_AUTH_USER` + `N8N_BASIC_AUTH_PASSWORD` (Basic Auth).
+  - The webhook has Authentication enabled in n8n. A call without credentials gets `403 "Authorization data is wrong!"`.
+- On Vercel, set `N8N_WEBHOOK_URL`, the auth variables, and `SUPABASE_URL` + `SUPABASE_PUBLISHABLE_KEY` as project environment variables for the function runtime. The function also falls back to the `VITE_SUPABASE_*` names. Don't rely on the committed `.env` reaching the function at runtime.
+- Restart the dev server after changing `.env` or `.env.local`.
+- The current URL is the n8n **production** webhook (`/webhook/…`). It only responds while the workflow is activated in n8n. The **test** variant (`/webhook-test/…`) only accepts one request after "Execute workflow" / "Listen for test event" is clicked. Either way, an unregistered webhook returns HTTP 404.
+- **Local dev:** `vite.config.ts` registers a dev middleware that runs the same `POST` handler from `api/generate.ts` at `/api/generate`, so local and Vercel behave identically.
+  - The middleware copies the server-side keys from `.env` / `.env.local` into `process.env` (`SERVER_ENV_KEYS`). Add new server variables there.
+  - It rebuilds a Web `Request` from the Node request (dropping hop-by-hop headers) and writes the Web `Response` back.
 
 ## Supabase (login)
 
@@ -48,7 +50,7 @@ There is no test runner and no linter configured. Verify changes with `npm run b
   - Rows are created by the `security definer` trigger function `public.handle_new_user()` (trigger `on_auth_user_created` on `auth.users`). It takes `raw_user_meta_data->>'name'` and falls back to the email local part.
   - Schema changes go through `apply_migration`; run `get_advisors` (security) afterwards.
 - Email confirmation is on. `signUp` passes `emailRedirectTo: window.location.origin`, so every app origin (localhost:5173, Vercel) must be listed under Authentication → URL Configuration in the Supabase dashboard.
-- The n8n webhook itself is not protected by the login; the gate is UI-only.
+- Generation is protected server-side. `api/generate.ts` requires `Authorization: Bearer <Supabase access token>` and verifies it with `GET {SUPABASE_URL}/auth/v1/user` before calling n8n. The browser gets the token from `getAccessToken()` in `authService.ts`.
 
 ## Architecture
 
@@ -60,17 +62,25 @@ The data flow is one-directional: hooks hold state, `App.tsx` wires them to pres
   - `signOut` never throws, because supabase-js removes the local session even when the server call fails.
 - **`src/hooks/useAuth.ts`**: subscribes via `onAuthStateChange` (its `INITIAL_SESSION` event replaces a separate `getSession`). The display name comes from `user_metadata.name`.
 
-- **`src/config.ts`**: single source for the webhook URL, the Supabase URL/key, the minimum password length (6), accepted MIME types (`image/jpeg`, `image/webp`), the per-file size limit (8 MB, because n8n caps a request at about 16 MB and both files share one request) and the request timeout (180 s).
+- **`api/generate.ts`** (Vercel Function, Web signature `export async function POST(request)`): login check, then forwards the multipart body unchanged (including the `content-type` with its boundary) to `N8N_WEBHOOK_URL` with the auth header added, and returns n8n's image response unchanged.
+  - It must stay self-contained (no relative imports), because Vercel bundles it on its own. It is type-checked through `tsconfig.node.json`.
+  - All of its errors are JSON `{ error: "<German message>" }`. n8n failures map to HTTP 502 with a status-specific message.
+  - Limits: Vercel accepts at most 4.5 MB per request body (`MAX_BODY_BYTES`). `maxDuration` is 180 s in `vercel.json`, and the upstream timeout is 170 s.
+- **`src/config.ts`**: single source for `GENERATE_ENDPOINT` (`/api/generate`), the Supabase URL/key, the minimum password length (6), accepted MIME types (`image/jpeg`, `image/webp`), the input size limit (25 MB), the upload target (2 MB / 2048 px per image, so both fit under Vercel's 4.5 MB) and the request timeout (180 s).
 - **`src/services/n8nService.ts`** (`generateImage`): builds `FormData` with the field names `Bild1` and `Bild2`. Those names are a contract with the n8n workflow and are case-sensitive.
-  - Never set the `Content-Type` header manually; the browser adds the multipart boundary.
+  - It POSTs to `/api/generate` with the Supabase bearer token. Never set the `Content-Type` header manually; the browser adds the multipart boundary.
   - The response must pass three checks: `response.ok`, a `Content-Type` of `image/jpeg` or `image/webp`, and a magic-byte check of the blob.
-  - All failures throw `GenerationError`, whose message is shown verbatim in the UI. Keep these messages user-facing German text.
+  - Error text comes from the server's JSON `error`, with a fallback from `messageForStatus` for platform errors. All failures throw `GenerationError`, whose message is shown verbatim in the UI. Keep these messages user-facing German text.
   - The timeout uses an internal `AbortController`, which also forwards an external abort signal.
+- **`src/utils/resizeImage.ts`** (`prepareForUpload`): files over 2 MB are redrawn on a canvas.
+  - The bitmap uses EXIF orientation, and the canvas gets a white background because JPEG has no transparency.
+  - Attempts step down from 2048 px / quality 0.9 to 1280 px / 0.75 until the file is ≤ 2 MB, and the result is saved as `.jpg`. Smaller files pass through unchanged.
 - **`src/utils/validateImage.ts`**: `detectImageType` sniffs JPEG/WebP magic bytes. It is shared by input validation and response validation.
   - Input files with an empty or mismatched `file.type` are re-wrapped as a `File` with the detected MIME type, so the multipart part carries the correct content type.
 - **`src/hooks/useImageFile.ts`**: one instance per upload slot.
-  - It validates the file, then creates a preview object URL. The URL is revoked through effect cleanup keyed on the `image` object.
-  - A `selectionId` ref discards results from stale async validations.
+  - It validates the file, runs `prepareForUpload`, then creates a preview object URL from the file that will actually be sent. The URL is revoked through effect cleanup keyed on the `image` object.
+  - `processing` is true while this runs. `Studio` blocks generation during that time, and the card shows "Wird vorbereitet".
+  - A `selectionId` ref discards results from stale async selections.
   - An invalid new file leaves the previously selected image in place.
 - **`src/hooks/useGeneration.ts`**: a state machine typed as the discriminated union `GenerationState` (`idle | loading | success | error`) in `src/types.ts`.
   - An `inFlight` ref (not state) blocks double submits synchronously.
@@ -100,7 +110,8 @@ The data flow is one-directional: hooks hold state, `App.tsx` wires them to pres
 ## Expected n8n workflow contract
 
 - Webhook: POST only, with the response mode set to "Using 'Respond to Webhook' Node". GET is intentionally not enabled because the images travel in the request body. Don't probe the URL with GET or a browser visit: n8n answers with a "not registered" error, which looks like an inactive test webhook. Test with a real multipart POST.
-- A **Respond to Webhook** node returns a *Binary File* with `Content-Type: image/jpeg` or `image/webp`.
-- "Allowed Origins (CORS)" must include the app's origin.
+- A **Respond to Webhook** node returns a *Binary File* with `Content-Type: image/jpeg` or `image/webp`. The response must also stay under Vercel's 4.5 MB response limit.
+- Authentication (Header Auth or Basic Auth) is on. The credentials are known only to `api/generate.ts`.
+- CORS no longer matters, because n8n is called server-to-server.
 
 JSON, URL or async job-ID responses are explicitly out of scope for the MVP.

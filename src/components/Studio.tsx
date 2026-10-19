@@ -1,8 +1,7 @@
 import { useRef } from 'react';
-import { IS_TEST_WEBHOOK, MAX_FILE_SIZE_MB, WEBHOOK_URL } from '../config';
+import { MAX_FILE_SIZE_MB } from '../config';
 import { useGeneration } from '../hooks/useGeneration';
 import { useImageFile } from '../hooks/useImageFile';
-import { ErrorMessage } from './ErrorMessage';
 import { GenerateButton } from './GenerateButton';
 import { ImageUploadCard } from './ImageUploadCard';
 import { PrivacyNotice } from './PrivacyNotice';
@@ -23,10 +22,11 @@ export function Studio() {
 
   const isLoading = state.status === 'loading';
   const hasBothImages = person.image !== null && garment.image !== null;
-  const canGenerate = hasBothImages && !isLoading;
+  const isPreparing = person.processing || garment.processing;
+  const canGenerate = hasBothImages && !isLoading && !isPreparing;
 
   const handleGenerate = () => {
-    if (!person.image || !garment.image || isLoading) return;
+    if (!person.image || !garment.image || !canGenerate) return;
     void generate(person.image.file, garment.image.file);
 
     // Auf kleinen Bildschirmen liegt der Ergebnisbereich unterhalb – dorthin scrollen.
@@ -72,6 +72,7 @@ export function Studio() {
             image={person.image}
             error={person.error}
             disabled={isLoading}
+            processing={person.processing}
             onSelect={person.select}
             onRemove={person.remove}
             onPreviewError={() => person.reject(PREVIEW_ERROR)}
@@ -84,6 +85,7 @@ export function Studio() {
             image={garment.image}
             error={garment.error}
             disabled={isLoading}
+            processing={garment.processing}
             onSelect={garment.select}
             onRemove={garment.remove}
             onPreviewError={() => garment.reject(PREVIEW_ERROR)}
@@ -101,22 +103,13 @@ export function Studio() {
         <p id="generate-hint" className="font-mono text-[10px] uppercase tracking-[0.2em] text-stone-dark sm:text-[11px]">
           {isLoading
             ? 'Bitte warten – die Anfrage läuft'
-            : hasBothImages
-              ? 'Bereit zur Generierung'
-              : 'Lade Bild1 und Bild2 hoch, um zu starten'}
+            : isPreparing
+              ? 'Bild wird vorbereitet'
+              : hasBothImages
+                ? 'Bereit zur Generierung'
+                : 'Lade Bild1 und Bild2 hoch, um zu starten'}
         </p>
         <PrivacyNotice />
-        {!WEBHOOK_URL && (
-          <ErrorMessage>
-            Die Webhook-URL fehlt. Bitte VITE_N8N_WEBHOOK_URL in der .env-Datei setzen und die App neu starten.
-          </ErrorMessage>
-        )}
-        {IS_TEST_WEBHOOK && (
-          <p className="max-w-md text-xs leading-relaxed text-stone-dark">
-            Testmodus: Vor dem Generieren in n8n „Listen for test event“ klicken – der Test-Webhook nimmt dann genau
-            eine Anfrage an.
-          </p>
-        )}
       </section>
 
       <div className="mt-16 sm:mt-24">

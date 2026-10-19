@@ -1,17 +1,8 @@
-const CONFIGURED_WEBHOOK_URL = import.meta.env.VITE_N8N_WEBHOOK_URL?.trim() ?? '';
-
-/** Pfad des Dev-Proxys aus vite.config.ts (muss dort mit DEV_PROXY_PATH übereinstimmen). */
-const DEV_PROXY_PATH = '/n8n-webhook';
-
 /**
- * Im Dev-Server geht die Anfrage über den Vite-Proxy (keine CORS-Sperre),
- * im Produktions-Build direkt an n8n.
+ * Serverfunktion (api/generate.ts), die Login prüft und die Bilder an n8n weiterleitet.
+ * Webhook-URL und Zugangsdaten kennt nur der Server.
  */
-export const WEBHOOK_URL =
-  import.meta.env.DEV && CONFIGURED_WEBHOOK_URL ? DEV_PROXY_PATH : CONFIGURED_WEBHOOK_URL;
-
-/** n8n-Test-Webhooks sind nur erreichbar, solange im Editor ein Testlauf aktiv ist. */
-export const IS_TEST_WEBHOOK = CONFIGURED_WEBHOOK_URL.includes('/webhook-test/');
+export const GENERATE_ENDPOINT = '/api/generate';
 
 /** Supabase (Login). Beide Werte sind öffentlich und landen im Browser-Bundle. */
 export const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL?.trim() ?? '';
@@ -27,12 +18,16 @@ export type SupportedMimeType = (typeof ACCEPTED_MIME_TYPES)[number];
 /** Wert für das accept-Attribut der Datei-Inputs (Endungen helfen Browsern ohne MIME-Erkennung). */
 export const FILE_INPUT_ACCEPT = 'image/jpeg,image/webp,.jpg,.jpeg,.webp';
 
-/**
- * n8n begrenzt die Request-Größe standardmäßig auf ca. 16 MB.
- * Beide Bilder werden in einem Request gesendet, daher max. 8 MB pro Datei.
- */
-export const MAX_FILE_SIZE_MB = 8;
+/** Größte Datei, die angenommen wird (größere Fotos werden vor dem Senden ohnehin verkleinert). */
+export const MAX_FILE_SIZE_MB = 25;
 export const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
+
+/**
+ * Vercel-Funktionen nehmen pro Anfrage höchstens 4,5 MB an. Beide Bilder reisen in einer Anfrage,
+ * daher wird jedes Bild über 2 MB im Browser verkleinert (lange Seite max. 2048 px, JPEG).
+ */
+export const UPLOAD_TARGET_BYTES = 2 * 1024 * 1024;
+export const UPLOAD_MAX_EDGE_PX = 2048;
 
 /** KI-Bildgenerierung kann dauern – danach wird die Anfrage abgebrochen. */
 export const REQUEST_TIMEOUT_MS = 180_000;

@@ -1,4 +1,4 @@
-import { ImagePlus, RefreshCw, X } from 'lucide-react';
+import { ImagePlus, Loader2, RefreshCw, X } from 'lucide-react';
 import { useId, useRef, useState, type ChangeEvent, type DragEvent, type ReactNode } from 'react';
 import { FILE_INPUT_ACCEPT } from '../config';
 import type { SelectedImage } from '../types';
@@ -17,6 +17,8 @@ interface ImageUploadCardProps {
   image: SelectedImage | null;
   error: string | null;
   disabled?: boolean;
+  /** Während ein Foto geprüft bzw. verkleinert wird */
+  processing?: boolean;
   onSelect: (file: File) => void;
   onRemove: () => void;
   onPreviewError: () => void;
@@ -29,11 +31,13 @@ export function ImageUploadCard({
   hint,
   image,
   error,
-  disabled = false,
+  disabled: disabledProp = false,
+  processing = false,
   onSelect,
   onRemove,
   onPreviewError,
 }: ImageUploadCardProps) {
+  const disabled = disabledProp || processing;
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragActive, setDragActive] = useState(false);
   const captionId = useId();
@@ -111,10 +115,16 @@ export function ImageUploadCard({
             className="group absolute inset-0 flex flex-col items-center justify-center gap-3 p-4 text-center outline-offset-[-6px] disabled:cursor-not-allowed sm:gap-4"
           >
             <span className="flex size-11 items-center justify-center rounded-full bg-paper/60 transition-colors group-hover:bg-paper sm:size-14">
-              <ImagePlus className="size-5" strokeWidth={1.25} aria-hidden="true" />
+              {processing ? (
+                <Loader2 className="size-5 animate-spin" strokeWidth={1.25} aria-hidden="true" />
+              ) : (
+                <ImagePlus className="size-5" strokeWidth={1.25} aria-hidden="true" />
+              )}
             </span>
-            <span className="text-[11px] font-medium uppercase tracking-[0.2em] sm:text-xs">Bild wählen</span>
-            <span className="hidden text-xs text-stone-dark sm:block">oder hierher ziehen</span>
+            <span className="text-[11px] font-medium uppercase tracking-[0.2em] sm:text-xs">
+              {processing ? 'Wird vorbereitet' : 'Bild wählen'}
+            </span>
+            {!processing && <span className="hidden text-xs text-stone-dark sm:block">oder hierher ziehen</span>}
           </button>
         )}
 
@@ -132,8 +142,16 @@ export function ImageUploadCard({
 
       <div className="mt-4 min-w-0">
         <p className="font-serif text-2xl leading-tight sm:text-3xl">{title}</p>
-        <p id={captionId} className="mt-1 truncate font-mono text-[10px] text-stone-dark sm:text-[11px]">
-          {image ? `${image.file.name} · ${formatFileSize(image.file.size)}` : hint}
+        <p
+          id={captionId}
+          aria-live="polite"
+          className="mt-1 truncate font-mono text-[10px] text-stone-dark sm:text-[11px]"
+        >
+          {processing
+            ? 'Bild wird vorbereitet…'
+            : image
+              ? `${image.file.name} · ${formatFileSize(image.file.size)}`
+              : hint}
         </p>
         {error && (
           <ErrorMessage id={errorId} className="mt-3">
