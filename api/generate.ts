@@ -44,12 +44,22 @@ function readAuthHeader(): [string, string] | null {
   return null;
 }
 
-function readConfig(): ServerConfig | null {
+/** Liefert die Konfiguration oder die Namen der fehlenden Variablen (Namen sind nicht geheim). */
+function readConfig(): { config: ServerConfig } | { missing: string[] } {
   const webhookUrl = env('N8N_WEBHOOK_URL');
   const supabaseUrl = env('SUPABASE_URL', 'VITE_SUPABASE_URL');
   const supabaseKey = env('SUPABASE_PUBLISHABLE_KEY', 'VITE_SUPABASE_PUBLISHABLE_KEY');
-  if (!webhookUrl || !supabaseUrl || !supabaseKey) return null;
-  return { webhookUrl, supabaseUrl: supabaseUrl.replace(/\/+$/, ''), supabaseKey, authHeader: readAuthHeader() };
+  const authHeader = readAuthHeader();
+
+  const missing = [
+    !webhookUrl && 'N8N_WEBHOOK_URL',
+    !supabaseUrl && 'SUPABASE_URL',
+    !supabaseKey && 'SUPABASE_PUBLISHABLE_KEY',
+    !authHeader && 'N8N_AUTH_HEADER_NAME/N8N_AUTH_HEADER_VALUE',
+  ].filter((name): name is string => Boolean(name));
+  if (missing.length > 0) return { missing };
+
+  return { config: { webhookUrl, supabaseUrl: supabaseUrl.replace(/\/+$/, ''), supabaseKey, authHeader } };
 }
 
 /** Fehlerantwort mit einer Nachricht, die der Browser direkt anzeigt. */
@@ -94,10 +104,15 @@ function messageForN8nStatus(status: number, webhookUrl: string): string {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  const config = readConfig();
-  if (!config) {
-    return fail(500, 'Der Server ist nicht vollständig konfiguriert. Bitte N8N_WEBHOOK_URL und die Supabase-Werte setzen.');
+  const result = readConfig();
+  if ('missing' in result) {
+    return fail(
+      500,
+      `Der Server ist nicht vollständig konfiguriert. Es fehlt: ${result.missing.join(', ')}. ` +
+        'Bitte bei Vercel für „Production“ eintragen und neu deployen.',
+    );
   }
+  const { config } = result;
 
   const signedIn = await isSignedIn(request, config);
   if (signedIn === 'unavailable') {
