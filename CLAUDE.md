@@ -23,13 +23,13 @@ There is no test runner and no linter configured. Verify changes with `npm run b
 ## Git
 
 - Remote `origin` is https://github.com/kaybritti/Bild-App, default branch `main`.
-- `.env`, `node_modules` and `dist` are gitignored. Never commit `.env`.
+- `node_modules` and `dist` are gitignored. `.env` is committed on purpose so hosted builds (Vercel) get the webhook URL; it must only ever contain public values, never secrets.
 - The commit identity is set repo-locally: `kaybritti <bmbartel@gmx.de>`.
 - Pushing over HTTPS goes through the Git Credential Manager. When no login is cached, `git push` waits silently for a browser sign-in, so a non-interactive push can appear to hang until the user signs in.
 
 ## Configuration
 
-- `VITE_N8N_WEBHOOK_URL` is set in `.env` (gitignored). `.env.example` is the template.
+- `VITE_N8N_WEBHOOK_URL` is set in `.env` (committed). `.env.example` is the template. An environment variable set in Vercel overrides it.
 - The value is inlined at build time and visible in the browser, so never put secrets in it.
 - Restart the dev server after changing `.env`.
 - The current URL is the n8n **production** webhook (`/webhook/…`). It only responds while the workflow is activated in n8n. The **test** variant (`/webhook-test/…`) only accepts one request after "Execute workflow" / "Listen for test event" is clicked. Either way, an unregistered webhook returns HTTP 404 JSON with no CORS headers. The UI shows a test-mode hint only when the URL contains `/webhook-test/`.

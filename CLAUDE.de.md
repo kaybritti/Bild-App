@@ -25,13 +25,13 @@ Es sind weder ein Test-Runner noch ein Linter eingerichtet. Änderungen werden m
 ## Git
 
 - Remote `origin` ist https://github.com/kaybritti/Bild-App, Standard-Branch `main`.
-- `.env`, `node_modules` und `dist` werden von Git ignoriert. `.env` niemals committen.
+- `node_modules` und `dist` werden von Git ignoriert. `.env` ist bewusst committet, damit gehostete Builds (Vercel) die Webhook-URL bekommen; sie darf nur öffentliche Werte enthalten, niemals Geheimnisse.
 - Die Commit-Identität ist nur für dieses Repo gesetzt: `kaybritti <bmbartel@gmx.de>`.
 - Push über HTTPS läuft über den Git Credential Manager. Ist keine Anmeldung gespeichert, wartet `git push` stumm auf eine Anmeldung im Browser. Ein nicht-interaktiver Push scheint dann zu hängen, bis der Nutzer sich anmeldet.
 
 ## Konfiguration
 
-- `VITE_N8N_WEBHOOK_URL` steht in `.env` (von Git ignoriert). `.env.example` ist die Vorlage.
+- `VITE_N8N_WEBHOOK_URL` steht in `.env` (committet). `.env.example` ist die Vorlage. Eine in Vercel gesetzte Umgebungsvariable hat Vorrang.
 - Der Wert wird beim Build eingebettet und ist im Browser sichtbar, deshalb niemals Geheimnisse dort eintragen.
 - Nach Änderungen an `.env` den Dev-Server neu starten.
 - Die aktuelle URL ist der n8n-**Produktions**-Webhook (`/webhook/…`). Er antwortet nur, solange der Workflow in n8n aktiviert ist. Die **Test**-Variante (`/webhook-test/…`) nimmt nur eine einzige Anfrage an, nachdem „Execute workflow“ bzw. „Listen for test event“ geklickt wurde. In beiden Fällen antwortet ein nicht registrierter Webhook mit HTTP 404 als JSON und ohne CORS-Header. Die Oberfläche zeigt den Testmodus-Hinweis nur, wenn die URL `/webhook-test/` enthält.
