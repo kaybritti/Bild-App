@@ -8,6 +8,8 @@ Diese Datei gibt Claude Code (claude.ai/code) Hinweise für die Arbeit am Code i
 
 AI Image Studio ist eine Single-Page-App mit React 19, TypeScript, Vite 8 und Tailwind CSS v4. Nutzer laden zwei Bilder hoch (Bild1 = Person, Bild2 = Kleidungsstück). Die App schickt sie per POST an einen n8n-Webhook, n8n gibt ein generiertes Bild zurück, und die App zeigt es an und bietet es zum Download an. Die Bildgenerierung findet ausschließlich in n8n statt. Niemals eine Mock- oder lokale Generierung als Ersatz einbauen.
 
+Die App ist nur nach Anmeldung über Supabase Auth nutzbar (E-Mail + Passwort, der Name wird bei der Registrierung erfasst, die E-Mail-Bestätigung ist Pflicht).
+
 `PRD_AI_Image_Studio.md` ist die verbindliche funktionale Vorgabe, `Kopfbedeckungen.jpg` die visuelle Designreferenz. Die Oberflächentexte sind deutsch, mit Ausnahme der festen englischen Beschriftungen „Generate Image“, „Creating your image…“ und „Create your look“.
 
 ## Befehle
@@ -25,7 +27,7 @@ Es sind weder ein Test-Runner noch ein Linter eingerichtet. Änderungen werden m
 ## Git
 
 - Remote `origin` ist https://github.com/kaybritti/Bild-App, Standard-Branch `main`.
-- `node_modules` und `dist` werden von Git ignoriert. `.env` ist bewusst committet, damit gehostete Builds (Vercel) die Webhook-URL bekommen; sie darf nur öffentliche Werte enthalten, niemals Geheimnisse.
+- `node_modules` und `dist` werden von Git ignoriert. `.env` ist bewusst committet, damit gehostete Builds (Vercel) die Webhook-URL und die Supabase-Werte bekommen; sie darf nur öffentliche Werte enthalten, niemals Geheimnisse.
 - Die Commit-Identität ist nur für dieses Repo gesetzt: `kaybritti <bmbartel@gmx.de>`.
 - Push über HTTPS läuft über den Git Credential Manager. Ist keine Anmeldung gespeichert, wartet `git push` stumm auf eine Anmeldung im Browser. Ein nicht-interaktiver Push scheint dann zu hängen, bis der Nutzer sich anmeldet.
 
@@ -40,11 +42,27 @@ Es sind weder ein Test-Runner noch ein Linter eingerichtet. Änderungen werden m
   - Der Produktions-Build ruft den Webhook direkt auf. Dafür muss CORS in n8n oder beim Hosting eingerichtet sein.
   - Die Pfad-Konstante `/n8n-webhook` steht doppelt in beiden Dateien und muss übereinstimmen. Das Proxy-Zeitlimit von 180 s entspricht `REQUEST_TIMEOUT_MS`.
 
+## Supabase (Login)
+
+- Projekt `vboojmnviogfrdjymmgv`, angebunden als MCP-Server `supabase`. `VITE_SUPABASE_URL` und `VITE_SUPABASE_PUBLISHABLE_KEY` (`sb_publishable_…`) stehen in `.env`. Beide sind öffentlich; den Secret- bzw. Service-Role-Key niemals dort eintragen.
+- Datenbank: `public.profiles` (`id` → `auth.users.id` mit Cascade-Delete, `name`, `created_at`).
+  - RLS ist aktiv. Angemeldete Nutzer dürfen nur ihre eigene Zeile lesen (`select`) und ändern (`update`); `insert`/`delete` vom Client gibt es nicht.
+  - Die Zeilen legt die `security definer`-Triggerfunktion `public.handle_new_user()` an (Trigger `on_auth_user_created` auf `auth.users`). Sie übernimmt `raw_user_meta_data->>'name'` und nutzt sonst den Teil der E-Mail vor dem `@`.
+  - Schemaänderungen laufen über `apply_migration`; danach `get_advisors` (security) ausführen.
+- Die E-Mail-Bestätigung ist aktiv. `signUp` übergibt `emailRedirectTo: window.location.origin`, deshalb muss jede Adresse der App (localhost:5173, Vercel) im Supabase-Dashboard unter Authentication → URL Configuration eingetragen sein.
+- Der n8n-Webhook selbst ist durch den Login nicht geschützt; die Sperre wirkt nur in der Oberfläche.
+
 ## Architektur
 
-Der Datenfluss geht in eine Richtung: Hooks halten den Zustand, `App.tsx` verbindet sie mit den darstellenden Komponenten, und nur `services/n8nService.ts` greift auf das Netzwerk zu.
+Der Datenfluss geht in eine Richtung: Hooks halten den Zustand, `App.tsx` verbindet sie mit den darstellenden Komponenten, und nur `src/services/` greift auf das Netzwerk zu.
 
-- **`src/config.ts`**: zentrale Stelle für die Webhook-URL, die erlaubten MIME-Typen (`image/jpeg`, `image/webp`), das Größenlimit pro Datei (8 MB, weil n8n eine Anfrage bei ca. 16 MB begrenzt und beide Dateien in einer Anfrage reisen) und das Zeitlimit der Anfrage (180 s).
+- **`src/App.tsx`**: rendert `Header`, dann je nach `AuthState` (`loading | signedOut | signedIn`) eine Statuszeile, `AuthScreen` oder `Studio`, dann `Footer`. `Studio` enthält die bisherige Seite mit Upload, Generierung und Ergebnis; beim Abmelden wird es entfernt, was eine laufende Anfrage abbricht und Object-URLs freigibt.
+- **`src/services/authService.ts`**: `signUp`, `signIn`, `signOut` und `subscribeToAuth` über den Client aus `supabaseClient.ts` (der `null` ist, wenn die Env-Werte fehlen).
+  - Fehler werfen `AuthServiceError` mit nutzerfreundlichem deutschem Text, abgeleitet aus den Supabase-Fehlercodes. Eine Registrierung mit einer bereits bestätigten Adresse liefert keinen Fehler, sondern einen Nutzer mit leerem `identities`; das wird als „bereits registriert“ behandelt.
+  - `signOut` wirft nie, weil supabase-js die lokale Session auch dann entfernt, wenn der Serveraufruf fehlschlägt.
+- **`src/hooks/useAuth.ts`**: abonniert `onAuthStateChange` (dessen `INITIAL_SESSION`-Event ersetzt ein separates `getSession`). Der Anzeigename kommt aus `user_metadata.name`.
+
+- **`src/config.ts`**: zentrale Stelle für die Webhook-URL, Supabase-URL und -Key, die Mindestlänge des Passworts (6), die erlaubten MIME-Typen (`image/jpeg`, `image/webp`), das Größenlimit pro Datei (8 MB, weil n8n eine Anfrage bei ca. 16 MB begrenzt und beide Dateien in einer Anfrage reisen) und das Zeitlimit der Anfrage (180 s).
 - **`src/services/n8nService.ts`** (`generateImage`): baut ein `FormData` mit den Feldnamen `Bild1` und `Bild2`. Diese Namen sind eine feste Absprache mit dem n8n-Workflow, Groß- und Kleinschreibung zählt.
   - Den `Content-Type`-Header niemals manuell setzen; der Browser ergänzt die Multipart-Boundary.
   - Die Antwort muss drei Prüfungen bestehen: `response.ok`, ein `Content-Type` von `image/jpeg` oder `image/webp` und eine Magic-Byte-Prüfung des Blobs.

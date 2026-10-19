@@ -13,6 +13,14 @@ export const WEBHOOK_URL =
 /** n8n-Test-Webhooks sind nur erreichbar, solange im Editor ein Testlauf aktiv ist. */
 export const IS_TEST_WEBHOOK = CONFIGURED_WEBHOOK_URL.includes('/webhook-test/');
 
+/** Supabase (Login). Beide Werte sind öffentlich und landen im Browser-Bundle. */
+export const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL?.trim() ?? '';
+export const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim() ?? '';
+export const IS_SUPABASE_CONFIGURED = SUPABASE_URL !== '' && SUPABASE_PUBLISHABLE_KEY !== '';
+
+/** Supabase verlangt standardmäßig mindestens 6 Zeichen. */
+export const MIN_PASSWORD_LENGTH = 6;
+
 export const ACCEPTED_MIME_TYPES = ['image/jpeg', 'image/webp'] as const;
 export type SupportedMimeType = (typeof ACCEPTED_MIME_TYPES)[number];
 

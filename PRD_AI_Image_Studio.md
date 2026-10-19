@@ -13,7 +13,9 @@ AI Image Studio ist eine elegante, minimalistische Web-App, die zwei hochgeladen
 
 ## 2. Zielgruppe und Umfang
 
-Die erste Version richtet sich an Nutzer, die ohne Registrierung zwei Bilder kombinieren möchten. Der MVP umfasst Bildauswahl, Vorschau, Übermittlung, Ladezustand, Fehlerbehandlung, Ergebnisanzeige und Download. Keine Datenbank, kein Benutzerkonto, keine Zahlungsfunktion und keine lokale KI-Bildgenerierung.
+Die erste Version richtet sich an Nutzer, die zwei Bilder kombinieren möchten. Der MVP umfasst Bildauswahl, Vorschau, Übermittlung, Ladezustand, Fehlerbehandlung, Ergebnisanzeige und Download. Keine Zahlungsfunktion und keine lokale KI-Bildgenerierung.
+
+**Änderung (Oktober 2026):** Die App ist nur nach Anmeldung nutzbar. Nutzer registrieren sich über Supabase Auth mit Name, E-Mail-Adresse und Passwort, bestätigen ihre E-Mail-Adresse über einen Link und melden sich danach mit E-Mail und Passwort an. Der Name wird in der Supabase-Tabelle `profiles` gespeichert. Bilder werden weiterhin nicht in einer Datenbank abgelegt.
 
 ## 3. Designvorgaben
 
@@ -191,8 +193,8 @@ Die gewählten Quelldateien bleiben nach einem Fehler erhalten. Fehlermeldungen 
 
 ## 10. Nicht Bestandteil der ersten Version
 
-- Login und Benutzerverwaltung
-- Datenbank, Cloud-Galerie und Bildhistorie
+- Benutzerverwaltung über Registrierung und Login hinaus (Login ist seit Oktober 2026 enthalten, siehe Abschnitt 2)
+- Cloud-Galerie und Bildhistorie
 - Zahlungen und Abonnements
 - Eigene KI-Bildgenerierung im Browser
 - Native iOS-/Android-App

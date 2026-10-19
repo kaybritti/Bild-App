@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 AI Image Studio: a React 19 + TypeScript + Vite 8 + Tailwind CSS v4 single-page app. Users upload two images (Bild1 = person, Bild2 = garment), the app POSTs them to an n8n webhook, and n8n returns a generated image that the app displays and offers for download. All image generation happens in n8n. Never add mock or local generation as a fallback.
 
+The app is only usable after signing in via Supabase Auth (email + password, with name captured at sign-up and email confirmation required).
+
 `PRD_AI_Image_Studio.md` is the binding functional spec, and `Kopfbedeckungen.jpg` is the visual design reference. UI copy is German, except for the fixed English labels "Generate Image", "Creating your image…" and "Create your look".
 
 ## Commands
@@ -23,7 +25,7 @@ There is no test runner and no linter configured. Verify changes with `npm run b
 ## Git
 
 - Remote `origin` is https://github.com/kaybritti/Bild-App, default branch `main`.
-- `node_modules` and `dist` are gitignored. `.env` is committed on purpose so hosted builds (Vercel) get the webhook URL; it must only ever contain public values, never secrets.
+- `node_modules` and `dist` are gitignored. `.env` is committed on purpose so hosted builds (Vercel) get the webhook URL and Supabase settings; it must only ever contain public values, never secrets.
 - The commit identity is set repo-locally: `kaybritti <bmbartel@gmx.de>`.
 - Pushing over HTTPS goes through the Git Credential Manager. When no login is cached, `git push` waits silently for a browser sign-in, so a non-interactive push can appear to hang until the user signs in.
 
@@ -38,11 +40,27 @@ There is no test runner and no linter configured. Verify changes with `npm run b
   - The production build calls the webhook directly, so CORS must be configured in n8n or on the host.
   - The path constant `/n8n-webhook` is duplicated in both files and must stay in sync. The 180 s proxy timeout mirrors `REQUEST_TIMEOUT_MS`.
 
+## Supabase (login)
+
+- Project `vboojmnviogfrdjymmgv`, connected as the `supabase` MCP server. `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` (`sb_publishable_…`) live in `.env`. Both are public; never put the secret or service-role key there.
+- Database: `public.profiles` (`id` → `auth.users.id` with cascade delete, `name`, `created_at`).
+  - RLS is on. Signed-in users may only `select`/`update` their own row; there is no client `insert`/`delete`.
+  - Rows are created by the `security definer` trigger function `public.handle_new_user()` (trigger `on_auth_user_created` on `auth.users`). It takes `raw_user_meta_data->>'name'` and falls back to the email local part.
+  - Schema changes go through `apply_migration`; run `get_advisors` (security) afterwards.
+- Email confirmation is on. `signUp` passes `emailRedirectTo: window.location.origin`, so every app origin (localhost:5173, Vercel) must be listed under Authentication → URL Configuration in the Supabase dashboard.
+- The n8n webhook itself is not protected by the login; the gate is UI-only.
+
 ## Architecture
 
-The data flow is one-directional: hooks hold state, `App.tsx` wires them to presentational components, and only `services/n8nService.ts` touches the network.
+The data flow is one-directional: hooks hold state, `App.tsx` wires them to presentational components, and only `src/services/` touches the network.
 
-- **`src/config.ts`**: single source for the webhook URL, accepted MIME types (`image/jpeg`, `image/webp`), the per-file size limit (8 MB, because n8n caps a request at about 16 MB and both files share one request) and the request timeout (180 s).
+- **`src/App.tsx`**: renders `Header`, then by `AuthState` (`loading | signedOut | signedIn`) a status line, `AuthScreen` or `Studio`, then `Footer`. `Studio` holds the former upload/generate/result page; it unmounts on sign-out, which aborts a running request and frees object URLs.
+- **`src/services/authService.ts`**: `signUp`, `signIn`, `signOut` and `subscribeToAuth` over the client in `supabaseClient.ts` (which is `null` when the env values are missing).
+  - Failures throw `AuthServiceError` with user-facing German text, mapped from Supabase error codes. A sign-up for an existing confirmed address returns a user with empty `identities` instead of an error; it is treated as "already registered".
+  - `signOut` never throws, because supabase-js removes the local session even when the server call fails.
+- **`src/hooks/useAuth.ts`**: subscribes via `onAuthStateChange` (its `INITIAL_SESSION` event replaces a separate `getSession`). The display name comes from `user_metadata.name`.
+
+- **`src/config.ts`**: single source for the webhook URL, the Supabase URL/key, the minimum password length (6), accepted MIME types (`image/jpeg`, `image/webp`), the per-file size limit (8 MB, because n8n caps a request at about 16 MB and both files share one request) and the request timeout (180 s).
 - **`src/services/n8nService.ts`** (`generateImage`): builds `FormData` with the field names `Bild1` and `Bild2`. Those names are a contract with the n8n workflow and are case-sensitive.
   - Never set the `Content-Type` header manually; the browser adds the multipart boundary.
   - The response must pass three checks: `response.ok`, a `Content-Type` of `image/jpeg` or `image/webp`, and a magic-byte check of the blob.
