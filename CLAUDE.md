@@ -20,6 +20,13 @@ npm run preview    # serve dist/
 
 There is no test runner and no linter configured. Verify changes with `npm run build`.
 
+## Git
+
+- Remote `origin` is https://github.com/kaybritti/Bild-App, default branch `main`.
+- `.env`, `node_modules` and `dist` are gitignored. Never commit `.env`.
+- The commit identity is set repo-locally: `kaybritti <bmbartel@gmx.de>`.
+- Pushing over HTTPS goes through the Git Credential Manager. When no login is cached, `git push` waits silently for a browser sign-in, so a non-interactive push can appear to hang until the user signs in.
+
 ## Configuration
 
 - `VITE_N8N_WEBHOOK_URL` is set in `.env` (gitignored). `.env.example` is the template.

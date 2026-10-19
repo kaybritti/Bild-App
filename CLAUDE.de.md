@@ -22,6 +22,13 @@ npm run preview    # dist/ lokal ausliefern
 
 Es sind weder ein Test-Runner noch ein Linter eingerichtet. Änderungen werden mit `npm run build` geprüft.
 
+## Git
+
+- Remote `origin` ist https://github.com/kaybritti/Bild-App, Standard-Branch `main`.
+- `.env`, `node_modules` und `dist` werden von Git ignoriert. `.env` niemals committen.
+- Die Commit-Identität ist nur für dieses Repo gesetzt: `kaybritti <bmbartel@gmx.de>`.
+- Push über HTTPS läuft über den Git Credential Manager. Ist keine Anmeldung gespeichert, wartet `git push` stumm auf eine Anmeldung im Browser. Ein nicht-interaktiver Push scheint dann zu hängen, bis der Nutzer sich anmeldet.
+
 ## Konfiguration
 
 - `VITE_N8N_WEBHOOK_URL` steht in `.env` (von Git ignoriert). `.env.example` ist die Vorlage.
