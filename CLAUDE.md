@@ -20,7 +20,7 @@ npm run typecheck  # tsc -b only
 npm run preview    # serve dist/ (static only: /api/generate is not available there)
 ```
 
-There is no test runner and no linter configured. Verify changes with `npm run build`.
+Use Node.js 24+. Run `npm test` (Node test runner + PGlite SQL checks) and `npm run build`. No linter is configured.
 
 ## Git
 
@@ -37,6 +37,7 @@ There is no test runner and no linter configured. Verify changes with `npm run b
   - The webhook has Authentication enabled in n8n. A call without credentials gets `403 "Authorization data is wrong!"`.
 - On Vercel, set `N8N_WEBHOOK_URL`, the auth variables, and `SUPABASE_URL` + `SUPABASE_PUBLISHABLE_KEY` as project environment variables for the function runtime. The function also falls back to the `VITE_SUPABASE_*` names. Don't rely on the committed `.env` reaching the function at runtime.
 - Restart the dev server after changing `.env` or `.env.local`.
+- Generation now requires `SUPABASE_SECRET_KEY` (server-only) and migration `supabase/migrations/202610200001_generation_limits.sql`. See README.md for setup. Missing quota configuration fails closed with 503. Never add a bypass or process-local fallback.
 - The current URL is the n8n **production** webhook (`/webhook/…`). It only responds while the workflow is activated in n8n. The **test** variant (`/webhook-test/…`) only accepts one request after "Execute workflow" / "Listen for test event" is clicked. Either way, an unregistered webhook returns HTTP 404.
 - **Local dev:** `vite.config.ts` registers a dev middleware that runs the same `POST` handler from `api/generate.ts` at `/api/generate`, so local and Vercel behave identically.
   - The middleware copies the server-side keys from `.env` / `.env.local` into `process.env` (`SERVER_ENV_KEYS`). Add new server variables there.
@@ -62,19 +63,19 @@ The data flow is one-directional: hooks hold state, `App.tsx` wires them to pres
   - `signOut` never throws, because supabase-js removes the local session even when the server call fails.
 - **`src/hooks/useAuth.ts`**: subscribes via `onAuthStateChange` (its `INITIAL_SESSION` event replaces a separate `getSession`). The display name comes from `user_metadata.name`.
 
-- **`api/generate.ts`** (Vercel Function, Web signature `export async function POST(request)`): login check, then forwards the multipart body unchanged (including the `content-type` with its boundary) to `N8N_WEBHOOK_URL` with the auth header added, and returns n8n's image response unchanged.
+- **`api/generate.ts`** (Vercel Function, Web signature `export async function POST(request)`): verifies confirmed, non-anonymous users, reserves database quota, validates exactly Bild1/Bild2, decodes/re-encodes using sharp to remove metadata, then calls n8n with server credentials. Image responses are bounded, validated and re-encoded as JPEG. Redirects are rejected.
   - It must stay self-contained (no relative imports), because Vercel bundles it on its own. It is type-checked through `tsconfig.node.json`.
   - All of its errors are JSON `{ error: "<German message>" }`. n8n failures map to HTTP 502 with a status-specific message.
-  - Limits: Vercel accepts at most 4.5 MB per request body (`MAX_BODY_BYTES`). `maxDuration` is 180 s in `vercel.json`, and the upstream timeout is 170 s.
+  - Limits: 4,500,000 bytes per body/response, 2 MiB per file, 16 million decoded pixels, one frame. `maxDuration` is 180 s; upstream timeout 140 s. Input/output streams and image processing are bounded. Database quotas: 10 attempts/user/UTC day, 100 globally/day, 60 s cooldown, one concurrent per user and five globally. Uncertain external jobs retain a 10-minute lease; failed attempts count.
 - **`src/config.ts`**: single source for `GENERATE_ENDPOINT` (`/api/generate`), the Supabase URL/key, the minimum password length (6), accepted MIME types (`image/jpeg`, `image/webp`), the input size limit (25 MB), the upload target (2 MB / 2048 px per image, so both fit under Vercel's 4.5 MB) and the request timeout (180 s).
 - **`src/services/n8nService.ts`** (`generateImage`): builds `FormData` with the field names `Bild1` and `Bild2`. Those names are a contract with the n8n workflow and are case-sensitive.
   - It POSTs to `/api/generate` with the Supabase bearer token. Never set the `Content-Type` header manually; the browser adds the multipart boundary.
   - The response must pass three checks: `response.ok`, a `Content-Type` of `image/jpeg` or `image/webp`, and a magic-byte check of the blob.
   - Error text comes from the server's JSON `error`, with a fallback from `messageForStatus` for platform errors. All failures throw `GenerationError`, whose message is shown verbatim in the UI. Keep these messages user-facing German text.
   - The timeout uses an internal `AbortController`, which also forwards an external abort signal.
-- **`src/utils/resizeImage.ts`** (`prepareForUpload`): files over 2 MB are redrawn on a canvas.
+- **`src/utils/resizeImage.ts`** (`prepareForUpload`): all files are redrawn on a canvas to remove metadata and cap dimensions, even below 2 MiB.
   - The bitmap uses EXIF orientation, and the canvas gets a white background because JPEG has no transparency.
-  - Attempts step down from 2048 px / quality 0.9 to 1280 px / 0.75 until the file is ≤ 2 MB, and the result is saved as `.jpg`. Smaller files pass through unchanged.
+  - Attempts step down from 2048 px / quality 0.9 to 1280 px / 0.75 until the file is ≤ 2 MiB. The result is named `bild.jpg` without original file metadata.
 - **`src/utils/validateImage.ts`**: `detectImageType` sniffs JPEG/WebP magic bytes. It is shared by input validation and response validation.
   - Input files with an empty or mismatched `file.type` are re-wrapped as a `File` with the detected MIME type, so the multipart part carries the correct content type.
 - **`src/hooks/useImageFile.ts`**: one instance per upload slot.
@@ -94,7 +95,7 @@ The data flow is one-directional: hooks hold state, `App.tsx` wires them to pres
 - Tailwind v4 is configured CSS-first in `src/index.css` via `@theme`. There is no `tailwind.config.js`.
 - Use the theme tokens rather than raw hex values:
   - colors: `paper`, `sand`, `sand-light`, `ink`, `stone`, `stone-dark`, `error`
-  - fonts: `font-serif` (Cormorant Garamond), `font-sans` (Inter), `font-mono` (JetBrains Mono); fonts load from Google Fonts in `index.html`
+  - fonts: `font-serif` (Cormorant Garamond), `font-sans` (Inter), `font-mono` (JetBrains Mono); fonts are bundled locally via `@fontsource` imports in `src/index.css`.
   - custom breakpoint `xs` (360px), below which the two upload cards stack
   - animations: `shimmer`, `progress`, `fade-in`
 - Visual language: minimal editorial fashion look.

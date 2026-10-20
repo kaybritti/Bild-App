@@ -28,7 +28,7 @@ export default function App() {
         </main>
       )}
       {auth.status === 'signedOut' && <AuthScreen />}
-      {auth.status === 'signedIn' && <Studio />}
+      {auth.status === 'signedIn' && <Studio key={auth.user.id} />}
 
       <Footer />
     </div>

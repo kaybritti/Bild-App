@@ -6,7 +6,8 @@ export function PrivacyNotice() {
       <ShieldCheck className="mt-px size-4 shrink-0" strokeWidth={1.25} aria-hidden="true" />
       <span>
         Deine Fotos werden zur Verarbeitung an einen externen Dienst (n8n-Workflow) übertragen. Die App selbst speichert
-        keine Bilder.
+        keine Bilder. Bildmetadaten werden vor der Weitergabe entfernt. Für den Missbrauchsschutz werden Nutzer-ID und
+        Anfragezeiten vorübergehend gespeichert.
       </span>
     </p>
   );

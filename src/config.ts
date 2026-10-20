@@ -24,7 +24,7 @@ export const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
 /**
  * Vercel-Funktionen nehmen pro Anfrage höchstens 4,5 MB an. Beide Bilder reisen in einer Anfrage,
- * daher wird jedes Bild über 2 MB im Browser verkleinert (lange Seite max. 2048 px, JPEG).
+ * daher wird jedes Bild im Browser neu kodiert (max. 2 MiB, lange Seite max. 2048 px, JPEG).
  */
 export const UPLOAD_TARGET_BYTES = 2 * 1024 * 1024;
 export const UPLOAD_MAX_EDGE_PX = 2048;

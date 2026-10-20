@@ -11,6 +11,8 @@ export function useImageFile() {
   // Verhindert, dass eine langsamere, ältere Auswahl eine neuere überschreibt.
   const selectionId = useRef(0);
 
+  useEffect(() => () => { selectionId.current++; }, []);
+
   useEffect(() => {
     if (!image) return;
     return () => URL.revokeObjectURL(image.previewUrl);

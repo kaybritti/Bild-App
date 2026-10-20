@@ -1,135 +1,130 @@
 # AI Image Studio
 
-Elegante, responsive Web-App, die zwei Bilder – **Bild1** (Person) und **Bild2** (Kleidungsstück) – an einen n8n-Workflow sendet und das zurückgegebene, generierte Bild anzeigt. Die Bildgenerierung findet ausschließlich in n8n statt.
+React-/TypeScript-App für virtuelle Anproben. Angemeldete Nutzer senden zwei Bilder
+(Person und Kleidungsstück) an einen authentifizierten n8n-Workflow. Es gibt keine
+lokale KI-Generierung und keinen Mock-Fallback.
 
-**Technik:** React 19 · TypeScript · Vite · Tailwind CSS v4 · Lucide Icons · Fetch API
+## Entwicklung
 
-## Voraussetzungen
+Voraussetzung: Node.js 24 oder neuer.
 
-- Node.js 20 oder neuer (getestet mit Node 24)
-- Ein n8n-Workflow mit Webhook (siehe unten)
-
-## Installation
-
-```bash
-npm install
+```sh
+npm ci
+npm run dev
+npm run build
+npm test
 ```
 
-## So läuft eine Anfrage
-
-```
-Browser ──(Bild1, Bild2 + Login-Token)──▶ /api/generate ──(Bilder + n8n-Zugangsdaten)──▶ n8n-Webhook
-```
-
-Der Browser spricht nie direkt mit n8n. Die Serverfunktion `api/generate.ts` prüft das Supabase-Login, ergänzt die Zugangsdaten für den Webhook und gibt das generierte Bild zurück. Webhook-URL und Passwort stehen deshalb nicht im Browser-Code.
+`npm run dev` stellt auch `/api/generate` bereit. `npm run preview` liefert nur
+statische Dateien; die API benötigt den Dev-Server oder Vercel.
 
 ## Konfiguration
 
-**`.env`** (im Git-Repository, nur öffentliche Werte):
+`.env` enthält ausschließlich öffentliche Werte:
 
-```dotenv
-N8N_WEBHOOK_URL=https://britta-ai.app.n8n.cloud/webhook/7c23bad7-e1fc-46b6-8ef3-0b15592524a9
-VITE_SUPABASE_URL=https://vboojmnviogfrdjymmgv.supabase.co
-VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_…
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_PUBLISHABLE_KEY` (niemals Secret- oder Service-Role-Key)
+- `N8N_WEBHOOK_URL` (nur serverseitig verwendet, HTTPS erforderlich)
+
+Geheimnisse gehören ausschließlich in `.env.local` und in die serverseitigen
+Vercel-Umgebungsvariablen:
+
+- `SUPABASE_SECRET_KEY`: Supabase Secret API Key (`sb_secret_...`) oder ein Legacy
+  Service-Role-JWT. **Kein `VITE_`-Präfix**, niemals committen oder im Browser verwenden.
+- `N8N_AUTH_HEADER_NAME` und `N8N_AUTH_HEADER_VALUE`, alternativ
+  `N8N_BASIC_AUTH_USER` und `N8N_BASIC_AUTH_PASSWORD`.
+- Für Vercel zusätzlich `SUPABASE_URL` und `SUPABASE_PUBLISHABLE_KEY` setzen.
+  Die API akzeptiert alternativ die jeweiligen `VITE_SUPABASE_*`-Variablen.
+
+Vorlage: `.env.example`. Nach Änderungen den Dev-Server neu starten bzw. neu deployen.
+Die API verwendet Secret Keys nur im `apikey`-Header; Legacy-JWTs zusätzlich als Bearer.
+Siehe [Supabase API Keys](https://supabase.com/docs/guides/getting-started/api-keys).
+
+## Nutzungsschutz aktivieren
+
+1. Die vollständige Migration
+   `supabase/migrations/202610200001_generation_limits.sql` im SQL-Editor des
+   richtigen Supabase-Projekts ausführen oder über den bestehenden Migrationsprozess
+   anwenden. Die Migration ist für einmalige Ausführung vorgesehen.
+2. Einen serverseitigen `SUPABASE_SECRET_KEY` lokal und bei Vercel hinterlegen.
+3. Bei Supabase E-Mail-Bestätigung und die erlaubten Redirect-URLs konfigurieren.
+4. Bei n8n die Webhook-Authentifizierung aktiv lassen und die Produktions-URL verwenden.
+5. Nach erfolgreicher Einrichtung deployen und mit einem bestätigten Testkonto prüfen.
+
+**Ohne Secret Key oder erreichbare Quota-Funktionen startet die API keine Generierung
+(HTTP 503). Es gibt keinen ungeschützten Ersatzbetrieb.**
+
+Die Datenbank begrenzt atomar über alle Serverinstanzen:
+
+| Grenze | Standard |
+|---|---:|
+| Versuche pro Nutzer und UTC-Tag | 10 |
+| Versuche insgesamt pro UTC-Tag | 100 |
+| Abstand pro Nutzer | 60 Sekunden |
+| Laufende Anfragen pro Nutzer | 1 |
+| Laufende Anfragen insgesamt | 5 |
+
+Die Reservierung erfolgt vor dem Dekodieren der Bilder. Auch ungültige Uploads und
+fehlgeschlagene Versuche zählen, damit diese Pfade nicht unbegrenzt belastet werden.
+HTTP 429 enthält `Retry-After`. Bei einem Netzwerkfehler oder Abbruch nach dem Start
+bleibt die Reservierung vorsichtshalber bis zu 10 Minuten aktiv: Ein abgebrochener
+HTTP-Aufruf beweist nicht, dass der externe KI-Auftrag gestoppt wurde. Der n8n-Workflow
+sollte entsprechend ein eigenes Laufzeitlimit haben. Die API startet keine automatischen
+Wiederholungen. Die Tagesgrenze begrenzt Versuche, keinen exakten Eurobetrag.
+
+Limits lassen sich ausschließlich administrativ ändern:
+
+```sql
+update private.generation_limits
+set user_daily = 10, global_daily = 100, global_concurrent = 5, cooldown_seconds = 60
+where id = true;
+
+-- Neue Generierungen sofort sperren (laufende externe Jobs bleiben bestehen):
+update private.generation_limits set enabled = false where id = true;
+-- Wieder freigeben:
+-- update private.generation_limits set enabled = true where id = true;
 ```
 
-**`.env.local`** (nicht im Git-Repository, geheime Werte): je nach *Authentication* im n8n-Webhook-Knoten **eine** der beiden Varianten ausfüllen.
+Die privaten Tabellen haben RLS und keine Freigabe für `anon`/`authenticated`.
+Die RPCs dürfen nur mit `service_role` ausgeführt werden; `search_path` ist festgesetzt.
+Siehe [Supabase-Datenbankfunktionen](https://supabase.com/docs/guides/database/functions).
+Gespeichert werden ausschließlich Nutzer-ID, Anfrage-ID und Zeiten; alte Einträge werden
+bei weiteren Reservierungen bereinigt (aktueller und vorheriger UTC-Tag). Ohne weitere
+Anfragen bleiben sie bis zur nächsten Bereinigung bestehen. Bilder werden dort nicht gespeichert.
 
-```dotenv
-# Variante A – Header Auth (Name und Wert aus dem n8n-Credential „Header Auth“)
-N8N_AUTH_HEADER_NAME=
-N8N_AUTH_HEADER_VALUE=
+## Bildverarbeitung und API
 
-# Variante B – Basic Auth (Benutzer und Passwort aus dem n8n-Credential „Basic Auth“)
-N8N_BASIC_AUTH_USER=
-N8N_BASIC_AUTH_PASSWORD=
-```
+- Genau zwei Multipart-Dateien: `Bild1` und `Bild2`, ohne zusätzliche oder doppelte Felder.
+- Jeweils JPEG oder WebP, maximal 2 MiB; gesamte Anfrage maximal 4.500.000 Bytes.
+- Browser akzeptiert Originale bis 25 MiB und kodiert sie immer als JPEG neu:
+  maximal 2048 Pixel Kantenlänge, ohne ursprüngliche Dateinamen/EXIF/GPS.
+- Der Server prüft unabhängig davon MIME-Typ, Signatur, Dekodierbarkeit, Animation
+  und maximale Pixelzahl (16 Millionen). Er kodiert jedes Bild nochmals neu, entfernt
+  Metadaten und leitet nur normierte Dateien an n8n weiter.
+- n8n muss synchron ein JPEG oder WebP mit passendem `Content-Type` liefern.
+  Die API begrenzt auch die Antwortgröße, dekodiert sie und liefert ein bereinigtes
+  JPEG mit maximal 4096 Pixel Kantenlänge und `Cache-Control: no-store` zurück.
+- Dekodierung ist zeitlich begrenzt. Der n8n-Aufruf hat 140 Sekunden Zeitlimit;
+  Vercel maximal 180 Sekunden. Transfers werden auch ohne `Content-Length` begrenzt.
+- Redirects bei authentifizierten Serveraufrufen werden abgewiesen.
+- Detaillierte Upstream-Fehler und Konfigurationsgeheimnisse werden nicht an Nutzer ausgegeben.
 
-Als Vorlage dient `.env.example`. Nach jeder Änderung an `.env` oder `.env.local` muss der Dev-Server neu gestartet werden.
+Für öffentliche Deployments gelten die Header aus `vercel.json`: CSP, Schutz gegen
+Einbettung und MIME-Sniffing, restriktive Berechtigungen und Referrer-Policy sowie HSTS.
+Die Schriften werden lokal ausgeliefert. Bei einem anderen Supabase-Projekt muss dessen
+exakte HTTPS-Domain in der CSP (`connect-src`) angepasst werden. Der Vite-Dev-Server
+hat wegen HMR keine Produktions-CSP und darf nicht öffentlich betrieben werden.
 
-> Variablen mit dem Präfix `VITE_` sind im Browser sichtbar. Dort keine Passwörter oder API-Schlüssel eintragen.
+## Prüfungen und Betriebsgrenzen
 
-### Vercel
+`npm test` prüft manipulierte Uploads, Auth-/Quota-Ausfälle, Grenzen, Metadatenentfernung,
+Abbrüche und defekte Antworten mit gemockten Netzaufrufen. Die echte SQL-Migration wird
+zusätzlich in lokalem PGlite auf Berechtigungen und Nutzungslimits geprüft.
+Es werden keine echten Bildgenerierungen oder kostenpflichtigen Dienste aufgerufen.
+`npm run build` prüft TypeScript und erzeugt den Produktions-Build.
 
-Unter *Project → Settings → Environment Variables* eintragen, danach neu deployen:
-
-| Variable | Wert |
-|---|---|
-| `N8N_WEBHOOK_URL` | Webhook-URL (wie in `.env`) |
-| `N8N_AUTH_HEADER_NAME` + `N8N_AUTH_HEADER_VALUE` **oder** `N8N_BASIC_AUTH_USER` + `N8N_BASIC_AUTH_PASSWORD` | Zugangsdaten aus n8n |
-| `SUPABASE_URL` | wie `VITE_SUPABASE_URL` |
-| `SUPABASE_PUBLISHABLE_KEY` | wie `VITE_SUPABASE_PUBLISHABLE_KEY` |
-
-Die Funktion `api/generate.ts` darf bis zu 180 Sekunden laufen (`vercel.json`). Vercel nimmt pro Anfrage höchstens 4,5 MB an. Deshalb verkleinert die App Fotos über 2 MB vor dem Senden automatisch.
-
-## Starten
-
-```bash
-npm run dev        # Entwicklungsserver unter http://localhost:5173
-npm run build      # TypeScript-Prüfung + Produktions-Build nach dist/
-npm run preview    # Produktions-Build lokal ansehen (ohne /api/generate)
-npm run typecheck  # nur TypeScript prüfen
-```
-
-## n8n-Webhook testen
-
-Die Test-URL (`/webhook-test/…`) ist nur erreichbar, solange in n8n ein Testlauf aktiv ist, und nimmt dann **genau eine** Anfrage an.
-
-1. Workflow in n8n öffnen.
-2. **„Listen for test event“** bzw. **„Execute workflow“** klicken.
-3. In der App Bild1 und Bild2 hochladen und **Generate Image** klicken.
-4. Für einen weiteren Test Schritt 2 wiederholen.
-
-Ist kein Testlauf aktiv, antwortet n8n mit HTTP 404 – die App zeigt dann einen entsprechenden Hinweis.
-
-Der Webhook ist bewusst nur für POST freigegeben. Die URL im Browser aufzurufen (GET) ergibt immer einen Fehler und ist kein sinnvoller Test.
-
-### Lokal und auf Vercel gleich
-
-Im Entwicklungsmodus (`npm run dev`) führt der Vite-Dev-Server dieselbe Serverfunktion `api/generate.ts` aus wie Vercel (siehe `vite.config.ts`). Die Zugangsdaten kommen lokal aus `.env.local`. CORS spielt keine Rolle, weil n8n immer vom Server aus aufgerufen wird.
-
-### Anforderungen an den n8n-Workflow
-
-| Punkt | Vorgabe |
-|---|---|
-| Webhook-Methode | `POST` |
-| Eingang | `multipart/form-data` mit den Binärfeldern `Bild1` und `Bild2` |
-| Antwort | **Respond to Webhook** → *Respond With: Binary File* |
-| Content-Type der Antwort | `image/jpeg` oder `image/webp` |
-| Antwortmodus des Webhooks | *Using 'Respond to Webhook' Node* (synchron) |
-| Authentication | Header Auth oder Basic Auth – dieselben Werte in `.env.local` und bei Vercel eintragen |
-| Antwortgröße | unter 4,5 MB (Vercel-Limit) |
-
-Antwortet der Workflow mit JSON, HTML, einem anderen Bildformat (z. B. PNG) oder einer leeren Datei, zeigt die App eine verständliche Fehlermeldung.
-
-### Produktion
-
-Für den Dauerbetrieb den Workflow aktivieren und die Produktions-URL (`/webhook/…` statt `/webhook-test/…`) als `N8N_WEBHOOK_URL` eintragen. Der Webhook ist per Authentication geschützt, und Bilder generieren können nur angemeldete Nutzer. Vor einer öffentlichen Nutzung zusätzlich Rate-Limits und Datenschutz prüfen (Speicherung und Löschung der Bilder im Workflow).
-
-## Validierung
-
-- Erlaubt sind JPEG und WebP (geprüft über MIME-Typ **und** Datei-Signatur).
-- Leere Dateien und Dateien über 25 MB werden abgelehnt.
-- Fotos über 2 MB werden im Browser automatisch verkleinert (lange Seite max. 2048 px, JPEG), damit beide Bilder zusammen unter das Vercel-Limit von 4,5 MB passen. Anpassbar in `src/config.ts`.
-- Zeitlimit pro Generierung: 3 Minuten (`REQUEST_TIMEOUT_MS` in `src/config.ts`).
-
-## Projektstruktur
-
-```
-api/
-  generate.ts                  Serverfunktion: Login prüfen, Bilder an n8n weiterleiten
-src/
-  App.tsx                      Seitenaufbau (Login oder Studio)
-  config.ts                    Endpunkt, Supabase, Formate, Limits
-  types.ts                     gemeinsame TypeScript-Typen
-  services/n8nService.ts       Aufruf der Serverfunktion /api/generate
-  services/authService.ts      Registrierung, Anmeldung, Zugriffstoken
-  hooks/useImageFile.ts        Dateiauswahl, Validierung, Verkleinerung, Vorschau
-  hooks/useGeneration.ts       Lade-/Ergebnis-/Fehlerzustand, Schutz vor Doppelanfragen
-  utils/validateImage.ts       Prüfung der Bilddateien
-  utils/resizeImage.ts         Verkleinern großer Fotos vor dem Senden
-  utils/format.ts              Formatierung (Dateigröße, Uhrzeit, Dateiname)
-  components/                  Studio, AuthScreen, Header, Footer, ImageUploadCard,
-                               GenerateButton, ResultPanel, PrivacyNotice, ErrorMessage
-vercel.json                    Laufzeitlimit der Serverfunktion
-```
+Datenbanklimits ersetzen keine Plattform-Firewall gegen große Mengen unautorisierter
+HTTP-Anfragen. Auth-Rate-Limits, Registrierungsschutz, RLS bestehender Tabellen,
+Monitoring und gegebenenfalls WAF müssen im tatsächlichen Hosting geprüft werden.
+Speicherung, Weitergabe und Löschung von Bildern bei n8n und dem KI-Anbieter sind
+außerhalb dieses Repositories und müssen separat eingerichtet werden.

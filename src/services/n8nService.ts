@@ -52,7 +52,9 @@ function parseImageContentType(header: string | null): SupportedMimeType | null 
  * die sie an den n8n-Webhook weiterleitet, und liefert das generierte Bild als Blob zurück.
  */
 export async function generateImage(bild1: File, bild2: File, signal?: AbortSignal): Promise<GeneratedImage> {
+  signal?.throwIfAborted();
   const token = await getAccessToken();
+  signal?.throwIfAborted();
   if (!token) {
     throw new GenerationError('Deine Sitzung ist abgelaufen. Bitte melde dich erneut an.');
   }
@@ -69,6 +71,7 @@ export async function generateImage(bild1: File, bild2: File, signal?: AbortSign
   }, REQUEST_TIMEOUT_MS);
   const forwardAbort = () => controller.abort();
   signal?.addEventListener('abort', forwardAbort, { once: true });
+  if (signal?.aborted) controller.abort();
 
   const failureFor = (fallback: string) => {
     if (timedOut) {
@@ -117,7 +120,7 @@ export async function generateImage(bild1: File, bild2: File, signal?: AbortSign
     if (blob.size === 0) {
       throw new GenerationError('n8n hat eine leere Bilddatei zurückgegeben.');
     }
-    if ((await detectImageType(blob)) === null) {
+    if ((await detectImageType(blob)) !== mimeType) {
       throw new GenerationError('Die Antwort von n8n ist keine gültige JPEG- oder WebP-Datei.');
     }
 

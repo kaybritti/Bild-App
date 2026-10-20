@@ -13,6 +13,7 @@ const SERVER_ENV_KEYS = [
   'N8N_BASIC_AUTH_PASSWORD',
   'SUPABASE_URL',
   'SUPABASE_PUBLISHABLE_KEY',
+  'SUPABASE_SECRET_KEY',
   'VITE_SUPABASE_URL',
   'VITE_SUPABASE_PUBLISHABLE_KEY',
 ];
@@ -22,7 +23,12 @@ const HOP_BY_HOP_HEADERS = new Set(['host', 'connection', 'content-length', 'tra
 
 async function readBody(req: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(chunk as Buffer);
+  let size = 0;
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    if (size > 4_500_000) throw new RangeError('Request body too large');
+    chunks.push(chunk as Buffer);
+  }
   return Buffer.concat(chunks);
 }
 
@@ -52,15 +58,19 @@ function apiDevServer(): Plugin {
           for (const [key, value] of Object.entries(req.headers)) {
             if (typeof value === 'string' && !HOP_BY_HOP_HEADERS.has(key)) headers.set(key, value);
           }
+          const controller = new AbortController();
+          req.once('aborted', () => controller.abort());
+          res.once('close', () => { if (!res.writableEnded) controller.abort(); });
           const request = new Request(`http://localhost${req.originalUrl ?? '/api/generate'}`, {
             method: 'POST',
             headers,
             body: new Uint8Array(await readBody(req)),
+            signal: controller.signal,
           });
           await sendResponse(res, await generateHandler(request));
         })().catch((error: unknown) => {
           server.config.logger.error(`[api/generate] ${String(error)}`);
-          if (!res.headersSent) res.statusCode = 500;
+          if (!res.headersSent) res.statusCode = error instanceof RangeError ? 413 : 500;
           res.end();
         });
       });
