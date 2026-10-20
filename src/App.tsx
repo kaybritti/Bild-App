@@ -2,19 +2,18 @@ import { Loader2 } from 'lucide-react';
 import { AuthScreen } from './components/AuthScreen';
 import { Footer } from './components/Footer';
 import { Header } from './components/Header';
+import { NewPasswordScreen } from './components/NewPasswordScreen';
 import { Studio } from './components/Studio';
 import { useAuth } from './hooks/useAuth';
 import { signOut } from './services/authService';
 
 export default function App() {
   const auth = useAuth();
+  const user = auth.status === 'signedIn' || auth.status === 'recovery' ? auth.user : undefined;
 
   return (
     <div className="flex min-h-dvh flex-col">
-      <Header
-        userName={auth.status === 'signedIn' ? auth.user.name : undefined}
-        onSignOut={auth.status === 'signedIn' ? () => void signOut() : undefined}
-      />
+      <Header userName={user?.name} onSignOut={user ? () => void signOut() : undefined} />
 
       {auth.status === 'loading' && (
         <main className="flex flex-1 items-center justify-center px-4">
@@ -28,6 +27,7 @@ export default function App() {
         </main>
       )}
       {auth.status === 'signedOut' && <AuthScreen />}
+      {auth.status === 'recovery' && <NewPasswordScreen />}
       {auth.status === 'signedIn' && <Studio key={auth.user.id} />}
 
       <Footer />

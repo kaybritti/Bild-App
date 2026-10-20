@@ -198,6 +198,18 @@ test('oversized and interrupted upstream bodies return controlled JSON errors', 
   }
 });
 
+test('any upstream answer releases the lease, so a failed workflow does not block retries', async () => {
+  for (const reply of [
+    () => new Response('workflow failed', { status: 500 }),
+    () => new Response('<html></html>', { headers: { 'content-type': 'text/html' } }),
+  ]) {
+    calls = [];
+    upstreamReply = reply;
+    assert.equal((await POST(request())).status, 502);
+    assert.ok(released());
+  }
+});
+
 test('network timeout retains lease because remote processing may continue', async () => {
   upstreamReply = () => { throw new DOMException('timeout', 'TimeoutError'); };
   assert.equal((await POST(request())).status, 504);

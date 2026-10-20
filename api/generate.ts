@@ -135,17 +135,21 @@ function imageType(bytes: Uint8Array): 'jpeg' | 'webp' | null {
 /** Full decode/re-encode rejects broken/animated images and discards EXIF/GPS metadata. */
 async function sanitizeImage(bytes: Uint8Array, edge: number, status: number): Promise<Buffer> {
   if (!imageType(bytes)) throw new HttpError(status, 'Erwartet wird eine gültige JPEG- oder WebP-Bilddatei.');
+  const decode = () => sharp(bytes, { limitInputPixels: MAX_PIXELS, failOn: 'warning' }).timeout({ seconds: 5 });
   try {
-    const image = sharp(bytes, { limitInputPixels: MAX_PIXELS, failOn: 'warning' }).timeout({ seconds: 5 });
-    const meta = await image.metadata();
+    const meta = await decode().metadata();
     if (!meta.width || !meta.height || meta.width * meta.height > MAX_PIXELS
       || (meta.pages ?? 1) !== 1 || (meta.format !== 'jpeg' && meta.format !== 'webp')) {
       throw new Error('Unsupported image');
     }
-    const output = await image.rotate().resize({ width: edge, height: edge, fit: 'inside', withoutEnlargement: true })
-      .flatten({ background: '#ffffff' }).jpeg({ quality: 85 }).toBuffer();
-    if (output.byteLength > (status === 400 ? MAX_FILE_BYTES : MAX_BODY_BYTES)) throw new Error('Image too large');
-    return output;
+    // Generated results keep more detail; lower qualities only keep them under the response limit.
+    for (const quality of status === 400 ? [85] : [92, 85, 75]) {
+      const output = await decode().rotate()
+        .resize({ width: edge, height: edge, fit: 'inside', withoutEnlargement: true })
+        .flatten({ background: '#ffffff' }).jpeg({ quality }).toBuffer();
+      if (output.byteLength <= (status === 400 ? MAX_FILE_BYTES : MAX_BODY_BYTES)) return output;
+    }
+    throw new Error('Image too large');
   } catch {
     throw new HttpError(status, 'Das Bild ist beschädigt, animiert oder zu groß. Bitte ein anderes Bild verwenden.');
   }
@@ -225,12 +229,14 @@ export async function POST(request: Request): Promise<Response> {
     const body = await uploadBody(request);
     const signal = AbortSignal.any([request.signal, AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)]);
     signal.throwIfAborted();
-    // After dispatch, a network error does not prove that n8n stopped processing.
+    // Until n8n answers, a network error does not prove that it stopped processing.
     // Keep the 10-minute lease in that case to prevent overlapping paid jobs.
     releaseReservation = false;
     const upstream = await fetch(config.webhookUrl, {
       method: 'POST', headers: new Headers([config.authHeader]), body, signal, redirect: 'error',
     });
+    // Any HTTP answer (including an error status) means the workflow run is over.
+    releaseReservation = true;
     if (!upstream.ok) {
       await upstream.body?.cancel();
       throw new HttpError(502, 'Die Bildgenerierung ist beim externen Dienst fehlgeschlagen. Bitte später erneut versuchen.');
@@ -241,7 +247,6 @@ export async function POST(request: Request): Promise<Response> {
       throw new HttpError(502, 'Der externe Dienst hat keine unterstützte Bilddatei geliefert.');
     }
     const bytes = await readLimited(upstream, MAX_BODY_BYTES, signal, 502);
-    releaseReservation = true;
     if (`image/${imageType(bytes)}` !== type) throw new HttpError(502, 'Die Bildantwort ist ungültig.');
     const output = await sanitizeImage(bytes, 4096, 502);
     signal.throwIfAborted();

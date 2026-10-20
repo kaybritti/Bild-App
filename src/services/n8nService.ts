@@ -41,6 +41,19 @@ async function readErrorMessage(response: Response): Promise<string> {
   return messageForStatus(response.status);
 }
 
+/** Macht aus dem Retry-After-Header (Sekunden) einen Hinweis wie „in etwa 3 Minuten“. */
+function waitHint(retryAfter: string | null): string {
+  const seconds = Number(retryAfter);
+  if (!Number.isFinite(seconds) || seconds <= 0) return '';
+  const wait =
+    seconds < 90
+      ? `${Math.ceil(seconds)} Sekunden`
+      : seconds < 90 * 60
+        ? `${Math.ceil(seconds / 60)} Minuten`
+        : `${Math.ceil(seconds / 3600)} Stunden`;
+  return ` Nächster Versuch in etwa ${wait} möglich.`;
+}
+
 function parseImageContentType(header: string | null): SupportedMimeType | null {
   const match = /^image\/(jpeg|jpg|webp)\s*(;|$)/i.exec(header?.trim() ?? '');
   if (!match) return null;
@@ -98,7 +111,9 @@ export async function generateImage(bild1: File, bild2: File, signal?: AbortSign
     }
 
     if (!response.ok) {
-      throw new GenerationError(await readErrorMessage(response));
+      const message = await readErrorMessage(response);
+      const hint = response.status === 429 ? waitHint(response.headers.get('retry-after')) : '';
+      throw new GenerationError(message + hint);
     }
 
     const contentType = response.headers.get('content-type');
@@ -106,7 +121,7 @@ export async function generateImage(bild1: File, bild2: File, signal?: AbortSign
     if (!mimeType) {
       const received = contentType?.split(';')[0].trim() || 'unbekannt';
       throw new GenerationError(
-        `n8n hat keine unterstützte Bilddatei zurückgegeben (erhalten: ${received}). Erwartet wird ein JPEG- oder WebP-Bild.`,
+        `Der Server hat keine unterstützte Bilddatei geliefert (erhalten: ${received}). Erwartet wird ein JPEG- oder WebP-Bild.`,
       );
     }
 
@@ -118,10 +133,10 @@ export async function generateImage(bild1: File, bild2: File, signal?: AbortSign
     }
 
     if (blob.size === 0) {
-      throw new GenerationError('n8n hat eine leere Bilddatei zurückgegeben.');
+      throw new GenerationError('Der Server hat eine leere Bilddatei geliefert.');
     }
     if ((await detectImageType(blob)) !== mimeType) {
-      throw new GenerationError('Die Antwort von n8n ist keine gültige JPEG- oder WebP-Datei.');
+      throw new GenerationError('Die Bildantwort ist keine gültige JPEG- oder WebP-Datei.');
     }
 
     return { blob: blob.type === mimeType ? blob : new Blob([blob], { type: mimeType }), mimeType };

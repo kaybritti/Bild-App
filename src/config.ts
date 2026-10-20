@@ -9,8 +9,15 @@ export const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL?.trim() ?? '';
 export const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim() ?? '';
 export const IS_SUPABASE_CONFIGURED = SUPABASE_URL !== '' && SUPABASE_PUBLISHABLE_KEY !== '';
 
-/** Supabase verlangt standardmäßig mindestens 6 Zeichen. */
-export const MIN_PASSWORD_LENGTH = 6;
+/**
+ * Cloudflare Turnstile (Schutz vor Bot-Registrierungen). Der Site Key ist öffentlich.
+ * Leer = kein CAPTCHA. Erst setzen, dann in Supabase „Bot and Abuse Protection“ aktivieren.
+ */
+export const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY?.trim() ?? '';
+export const IS_CAPTCHA_ENABLED = TURNSTILE_SITE_KEY !== '';
+
+/** Muss zu „Minimum password length“ in Supabase (Authentication → Providers → Email) passen. */
+export const MIN_PASSWORD_LENGTH = 8;
 
 export const ACCEPTED_MIME_TYPES = ['image/jpeg', 'image/webp'] as const;
 export type SupportedMimeType = (typeof ACCEPTED_MIME_TYPES)[number];

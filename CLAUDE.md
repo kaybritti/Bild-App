@@ -37,7 +37,7 @@ Use Node.js 24+. Run `npm test` (Node test runner + PGlite SQL checks) and `npm 
   - The webhook has Authentication enabled in n8n. A call without credentials gets `403 "Authorization data is wrong!"`.
 - On Vercel, set `N8N_WEBHOOK_URL`, the auth variables, and `SUPABASE_URL` + `SUPABASE_PUBLISHABLE_KEY` as project environment variables for the function runtime. The function also falls back to the `VITE_SUPABASE_*` names. Don't rely on the committed `.env` reaching the function at runtime.
 - Restart the dev server after changing `.env` or `.env.local`.
-- Generation now requires `SUPABASE_SECRET_KEY` (server-only) and migration `supabase/migrations/202610200001_generation_limits.sql`. See README.md for setup. Missing quota configuration fails closed with 503. Never add a bypass or process-local fallback.
+- Generation now requires `SUPABASE_SECRET_KEY` (server-only) and migration `supabase/migrations/202610200001_generation_limits.sql` (applied to the live project as version `20261020000001`). See README.md for setup. Missing quota configuration fails closed with 503. Never add a bypass or process-local fallback.
 - The current URL is the n8n **production** webhook (`/webhook/…`). It only responds while the workflow is activated in n8n. The **test** variant (`/webhook-test/…`) only accepts one request after "Execute workflow" / "Listen for test event" is clicked. Either way, an unregistered webhook returns HTTP 404.
 - **Local dev:** `vite.config.ts` registers a dev middleware that runs the same `POST` handler from `api/generate.ts` at `/api/generate`, so local and Vercel behave identically.
   - The middleware copies the server-side keys from `.env` / `.env.local` into `process.env` (`SERVER_ENV_KEYS`). Add new server variables there.
@@ -49,29 +49,33 @@ Use Node.js 24+. Run `npm test` (Node test runner + PGlite SQL checks) and `npm 
 - Database: `public.profiles` (`id` → `auth.users.id` with cascade delete, `name`, `created_at`).
   - RLS is on. Signed-in users may only `select`/`update` their own row; there is no client `insert`/`delete`.
   - Rows are created by the `security definer` trigger function `public.handle_new_user()` (trigger `on_auth_user_created` on `auth.users`). It takes `raw_user_meta_data->>'name'` and falls back to the email local part.
-  - Schema changes go through `apply_migration`; run `get_advisors` (security) afterwards.
-- Email confirmation is on. `signUp` passes `emailRedirectTo: window.location.origin`, so every app origin (localhost:5173, Vercel) must be listed under Authentication → URL Configuration in the Supabase dashboard.
+  - Schema changes go through `apply_migration`; run `get_advisors` (security) afterwards. If `apply_migration` fails with "Invalid or expired requestState", run the SQL in one transaction via `execute_sql` and insert the row into `supabase_migrations.schema_migrations` yourself.
+  - Quota tables live in schema `private` (RLS on, no policies, no grants for `anon`/`authenticated`). The advisor's "RLS enabled, no policy" notice for them is intended.
+- Email confirmation is on. `signUp`, `resendConfirmation` and `requestPasswordReset` pass `window.location.origin` as redirect, so every app origin (localhost:5173, Vercel) must be listed under Authentication → URL Configuration in the Supabase dashboard.
+- Optional CAPTCHA: Cloudflare Turnstile, enabled by the public `VITE_TURNSTILE_SITE_KEY`. Its token goes to sign-in, sign-up, resend and password reset. Set the key and deploy first, then enable captcha protection in Supabase; the other order breaks every login. The CSP allows `https://challenges.cloudflare.com` in `script-src` and `frame-src`.
+- Password length, leaked-password protection and SMTP are dashboard settings, not code. README.md lists them.
 - Generation is protected server-side. `api/generate.ts` requires `Authorization: Bearer <Supabase access token>` and verifies it with `GET {SUPABASE_URL}/auth/v1/user` before calling n8n. The browser gets the token from `getAccessToken()` in `authService.ts`.
 
 ## Architecture
 
 The data flow is one-directional: hooks hold state, `App.tsx` wires them to presentational components, and only `src/services/` touches the network.
 
-- **`src/App.tsx`**: renders `Header`, then by `AuthState` (`loading | signedOut | signedIn`) a status line, `AuthScreen` or `Studio`, then `Footer`. `Studio` holds the former upload/generate/result page; it unmounts on sign-out, which aborts a running request and frees object URLs.
-- **`src/services/authService.ts`**: `signUp`, `signIn`, `signOut` and `subscribeToAuth` over the client in `supabaseClient.ts` (which is `null` when the env values are missing).
+- **`src/App.tsx`**: renders `Header`, then by `AuthState` (`loading | signedOut | recovery | signedIn`) a status line, `AuthScreen`, `NewPasswordScreen` or `Studio`, then `Footer`. `Studio` holds the former upload/generate/result page; it unmounts on sign-out, which aborts a running request and frees object URLs.
+- **`src/services/authService.ts`**: `signUp`, `signIn`, `resendConfirmation`, `requestPasswordReset`, `updatePassword`, `signOut` and `subscribeToAuth` over the client in `supabaseClient.ts` (which is `null` when the env values are missing).
   - Failures throw `AuthServiceError` with user-facing German text, mapped from Supabase error codes. A sign-up for an existing confirmed address returns a user with empty `identities` instead of an error; it is treated as "already registered".
   - `signOut` never throws, because supabase-js removes the local session even when the server call fails.
-- **`src/hooks/useAuth.ts`**: subscribes via `onAuthStateChange` (its `INITIAL_SESSION` event replaces a separate `getSession`). The display name comes from `user_metadata.name`.
+- **`src/hooks/useAuth.ts`**: subscribes via `onAuthStateChange` (its `INITIAL_SESSION` event replaces a separate `getSession`). The display name comes from `user_metadata.name`, cut to 100 characters. A `PASSWORD_RECOVERY` event switches to `recovery` and keeps it through later events until `USER_UPDATED` or sign-out.
+- **`src/components/AuthScreen.tsx`**: modes `signIn | signUp | reset`, plus a "resend confirmation" action after sign-up or an `email_not_confirmed` error. With Turnstile on, the `Captcha` widget is remounted (new `key`) after every attempt, because tokens are single-use. Shared inputs live in `FormFields.tsx`.
 
 - **`api/generate.ts`** (Vercel Function, Web signature `export async function POST(request)`): verifies confirmed, non-anonymous users, reserves database quota, validates exactly Bild1/Bild2, decodes/re-encodes using sharp to remove metadata, then calls n8n with server credentials. Image responses are bounded, validated and re-encoded as JPEG. Redirects are rejected.
   - It must stay self-contained (no relative imports), because Vercel bundles it on its own. It is type-checked through `tsconfig.node.json`.
   - All of its errors are JSON `{ error: "<German message>" }`. n8n failures map to HTTP 502 with a status-specific message.
-  - Limits: 4,500,000 bytes per body/response, 2 MiB per file, 16 million decoded pixels, one frame. `maxDuration` is 180 s; upstream timeout 140 s. Input/output streams and image processing are bounded. Database quotas: 10 attempts/user/UTC day, 100 globally/day, 60 s cooldown, one concurrent per user and five globally. Uncertain external jobs retain a 10-minute lease; failed attempts count.
-- **`src/config.ts`**: single source for `GENERATE_ENDPOINT` (`/api/generate`), the Supabase URL/key, the minimum password length (6), accepted MIME types (`image/jpeg`, `image/webp`), the input size limit (25 MB), the upload target (2 MB / 2048 px per image, so both fit under Vercel's 4.5 MB) and the request timeout (180 s).
+  - Limits: 4,500,000 bytes per body/response, 2 MiB per file, 16 million decoded pixels, one frame. `maxDuration` is 180 s; upstream timeout 140 s. Input/output streams and image processing are bounded. Database quotas: 10 attempts/user/UTC day, 100 globally/day, 60 s cooldown, one concurrent per user and five globally. The lease is released as soon as n8n sends any HTTP answer (even an error). Only a network error, timeout or abort before that answer keeps the 10-minute lease. Failed attempts count toward the daily limits. The result JPEG uses quality 92 and steps down to 85/75 only to stay under the response limit.
+- **`src/config.ts`**: single source for `GENERATE_ENDPOINT` (`/api/generate`), the Supabase URL/key, the Turnstile site key, the minimum password length (8), accepted MIME types (`image/jpeg`, `image/webp`), the input size limit (25 MB), the upload target (2 MB / 2048 px per image, so both fit under Vercel's 4.5 MB) and the request timeout (180 s).
 - **`src/services/n8nService.ts`** (`generateImage`): builds `FormData` with the field names `Bild1` and `Bild2`. Those names are a contract with the n8n workflow and are case-sensitive.
   - It POSTs to `/api/generate` with the Supabase bearer token. Never set the `Content-Type` header manually; the browser adds the multipart boundary.
   - The response must pass three checks: `response.ok`, a `Content-Type` of `image/jpeg` or `image/webp`, and a magic-byte check of the blob.
-  - Error text comes from the server's JSON `error`, with a fallback from `messageForStatus` for platform errors. All failures throw `GenerationError`, whose message is shown verbatim in the UI. Keep these messages user-facing German text.
+  - Error text comes from the server's JSON `error`, with a fallback from `messageForStatus` for platform errors. All failures throw `GenerationError`, whose message is shown verbatim in the UI. Keep these messages user-facing German text. On HTTP 429 the wait time from `Retry-After` is appended.
   - The timeout uses an internal `AbortController`, which also forwards an external abort signal.
 - **`src/utils/resizeImage.ts`** (`prepareForUpload`): all files are redrawn on a canvas to remove metadata and cap dimensions, even below 2 MiB.
   - The bitmap uses EXIF orientation, and the canvas gets a white background because JPEG has no transparency.

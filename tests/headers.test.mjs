@@ -11,6 +11,9 @@ test('production headers restrict scripts, framing and network destinations', as
   assert.ok(csp.includes("frame-ancestors 'none'"));
   assert.ok(csp.includes("object-src 'none'"));
   assert.ok(csp.includes("img-src 'self' blob:"));
+  // Only Cloudflare Turnstile (CAPTCHA) may load scripts or frames from elsewhere.
+  assert.match(csp, /script-src 'self' https:\/\/challenges\.cloudflare\.com;/);
+  assert.match(csp, /frame-src https:\/\/challenges\.cloudflare\.com;/);
   assert.ok(!csp.includes('unsafe-inline') && !csp.includes('unsafe-eval') && !csp.includes('*'));
   assert.equal(headers['x-content-type-options'], 'nosniff');
   assert.equal(headers['x-frame-options'], 'DENY');

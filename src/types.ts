@@ -26,4 +26,6 @@ export interface AuthUser {
 export type AuthState =
   | { status: 'loading' }
   | { status: 'signedOut' }
-  | { status: 'signedIn'; user: AuthUser };
+  | { status: 'signedIn'; user: AuthUser }
+  /** Über den Link aus der Passwort-Mail angemeldet; erst ein neues Passwort festlegen. */
+  | { status: 'recovery'; user: AuthUser };

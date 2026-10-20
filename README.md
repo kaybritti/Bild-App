@@ -25,6 +25,7 @@ statische Dateien; die API benötigt den Dev-Server oder Vercel.
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_PUBLISHABLE_KEY` (niemals Secret- oder Service-Role-Key)
 - `N8N_WEBHOOK_URL` (nur serverseitig verwendet, HTTPS erforderlich)
+- `VITE_TURNSTILE_SITE_KEY` (optional, Cloudflare-Turnstile-Site-Key; leer = kein CAPTCHA)
 
 Geheimnisse gehören ausschließlich in `.env.local` und in die serverseitigen
 Vercel-Umgebungsvariablen:
@@ -45,7 +46,8 @@ Siehe [Supabase API Keys](https://supabase.com/docs/guides/getting-started/api-k
 1. Die vollständige Migration
    `supabase/migrations/202610200001_generation_limits.sql` im SQL-Editor des
    richtigen Supabase-Projekts ausführen oder über den bestehenden Migrationsprozess
-   anwenden. Die Migration ist für einmalige Ausführung vorgesehen.
+   anwenden. Die Migration ist für einmalige Ausführung vorgesehen. Im Projekt
+   `vboojmnviogfrdjymmgv` ist sie seit 20.10.2026 als Version `20261020000001` eingespielt.
 2. Einen serverseitigen `SUPABASE_SECRET_KEY` lokal und bei Vercel hinterlegen.
 3. Bei Supabase E-Mail-Bestätigung und die erlaubten Redirect-URLs konfigurieren.
 4. Bei n8n die Webhook-Authentifizierung aktiv lassen und die Produktions-URL verwenden.
@@ -66,8 +68,10 @@ Die Datenbank begrenzt atomar über alle Serverinstanzen:
 
 Die Reservierung erfolgt vor dem Dekodieren der Bilder. Auch ungültige Uploads und
 fehlgeschlagene Versuche zählen, damit diese Pfade nicht unbegrenzt belastet werden.
-HTTP 429 enthält `Retry-After`. Bei einem Netzwerkfehler oder Abbruch nach dem Start
-bleibt die Reservierung vorsichtshalber bis zu 10 Minuten aktiv: Ein abgebrochener
+HTTP 429 enthält `Retry-After`; die App zeigt daraus die Wartezeit an. Sobald n8n
+antwortet – auch mit einem Fehlerstatus –, wird die Reservierung freigegeben (der
+Abstand von 60 Sekunden gilt weiter). Bei einem Netzwerkfehler, Timeout oder Abbruch,
+bevor n8n antwortet, bleibt sie vorsichtshalber bis zu 10 Minuten aktiv: Ein abgebrochener
 HTTP-Aufruf beweist nicht, dass der externe KI-Auftrag gestoppt wurde. Der n8n-Workflow
 sollte entsprechend ein eigenes Laufzeitlimit haben. Die API startet keine automatischen
 Wiederholungen. Die Tagesgrenze begrenzt Versuche, keinen exakten Eurobetrag.
@@ -92,6 +96,34 @@ Gespeichert werden ausschließlich Nutzer-ID, Anfrage-ID und Zeiten; alte Eintr�
 bei weiteren Reservierungen bereinigt (aktueller und vorheriger UTC-Tag). Ohne weitere
 Anfragen bleiben sie bis zur nächsten Bereinigung bestehen. Bilder werden dort nicht gespeichert.
 
+## Konten schützen (Supabase- und Vercel-Dashboard)
+
+Diese Einstellungen liegen außerhalb des Codes und müssen im Dashboard gesetzt werden:
+
+1. **Passwortlänge:** Authentication → Providers → Email → *Minimum password length*
+   auf **8** setzen (passend zu `MIN_PASSWORD_LENGTH` in `src/config.ts`). Die App
+   prüft die Länge nur im Formular; verbindlich ist die Supabase-Einstellung.
+2. **Geleakte Passwörter:** Authentication → Attack Protection → *Prevent use of leaked
+   passwords* aktivieren (HaveIBeenPwned; je nach Supabase-Plan verfügbar).
+3. **Eigener SMTP-Server:** Authentication → Emails → SMTP Settings. Ohne eigenen SMTP
+   verschickt Supabase nur sehr wenige Mails und nur an Mitglieder des Projektteams;
+   Bestätigungs- und Passwort-Mails erreichen echte Nutzer dann nicht.
+4. **Redirect-URLs:** Authentication → URL Configuration muss jede App-Adresse enthalten
+   (lokal und Vercel). Bestätigungs- und Passwort-Links führen auf `window.location.origin`.
+5. **CAPTCHA gegen Bot-Registrierungen** (Cloudflare Turnstile), in dieser Reihenfolge:
+   1. Im Cloudflare-Dashboard ein Turnstile-Widget für die App-Domains anlegen.
+   2. Den **Site Key** als `VITE_TURNSTILE_SITE_KEY` in `.env` eintragen und deployen.
+      Die App zeigt das Widget dann bei Anmeldung, Registrierung und Passwort-Mails.
+   3. Erst danach in Supabase unter Authentication → Attack Protection *Enable Captcha
+      protection* (Turnstile) aktivieren und den **Secret Key** dort hinterlegen.
+      Umgekehrt schlägt jede Anmeldung fehl, solange die App noch kein Token mitsendet.
+   Die CSP in `vercel.json` erlaubt dafür `https://challenges.cloudflare.com`.
+6. **Optional, Vercel Firewall:** eine Rate-Limit-Regel für `/api/generate`, damit Anfragen
+   ohne Login keine Funktionsaufrufe verbrauchen.
+
+Ohne CAPTCHA kann ein Angreifer mit wenigen bestätigten Konten das gemeinsame Tageslimit
+(100) ausschöpfen und die App für alle bis Mitternacht (UTC) sperren.
+
 ## Bildverarbeitung und API
 
 - Genau zwei Multipart-Dateien: `Bild1` und `Bild2`, ohne zusätzliche oder doppelte Felder.
@@ -103,7 +135,8 @@ Anfragen bleiben sie bis zur nächsten Bereinigung bestehen. Bilder werden dort 
   Metadaten und leitet nur normierte Dateien an n8n weiter.
 - n8n muss synchron ein JPEG oder WebP mit passendem `Content-Type` liefern.
   Die API begrenzt auch die Antwortgröße, dekodiert sie und liefert ein bereinigtes
-  JPEG mit maximal 4096 Pixel Kantenlänge und `Cache-Control: no-store` zurück.
+  JPEG (Qualität 92, bei Bedarf 85 bzw. 75, um unter 4,5 MB zu bleiben) mit maximal
+  4096 Pixel Kantenlänge und `Cache-Control: no-store` zurück.
 - Dekodierung ist zeitlich begrenzt. Der n8n-Aufruf hat 140 Sekunden Zeitlimit;
   Vercel maximal 180 Sekunden. Transfers werden auch ohne `Content-Length` begrenzt.
 - Redirects bei authentifizierten Serveraufrufen werden abgewiesen.
