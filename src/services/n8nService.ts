@@ -18,6 +18,7 @@ export interface GeneratedImage {
 /** Ersatztexte, falls die Serverfunktion selbst nicht antwortet (z. B. Plattform-Fehler von Vercel). */
 function messageForStatus(status: number): string {
   if (status === 401) return 'Deine Sitzung ist abgelaufen. Bitte melde dich erneut an.';
+  if (status === 402) return 'Für die Bildgenerierung brauchst du ein aktives Abo.';
   if (status === 404) return 'Die Serverfunktion wurde nicht gefunden (HTTP 404).';
   if (status === 413) return 'Die Bilder sind zusammen zu groß (HTTP 413). Bitte kleinere Dateien verwenden.';
   if (status === 429) return 'Zu viele Anfragen (HTTP 429). Bitte einen Moment warten und erneut versuchen.';
@@ -50,7 +51,9 @@ function waitHint(retryAfter: string | null): string {
       ? `${Math.ceil(seconds)} Sekunden`
       : seconds < 90 * 60
         ? `${Math.ceil(seconds / 60)} Minuten`
-        : `${Math.ceil(seconds / 3600)} Stunden`;
+        : seconds < 36 * 3600
+          ? `${Math.ceil(seconds / 3600)} Stunden`
+          : `${Math.ceil(seconds / 86400)} Tagen`;
   return ` Nächster Versuch in etwa ${wait} möglich.`;
 }
 

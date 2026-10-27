@@ -220,8 +220,15 @@ export async function POST(request: Request): Promise<Response> {
       throw new HttpError(503, 'Der Nutzungsschutz ist gerade nicht verfügbar.');
     }
     if (!quota.allowed) {
+      const reason = 'reason' in quota ? quota.reason : undefined;
+      if (reason === 'subscription') {
+        return fail(402, 'Für die Bildgenerierung brauchst du ein aktives Abo. Du kannst es 7 Tage kostenlos testen.');
+      }
       const retry = 'retry_after' in quota && typeof quota.retry_after === 'number'
-        ? Math.max(1, Math.min(86400, Math.ceil(quota.retry_after))) : 60;
+        ? Math.max(1, Math.min(reason === 'period_quota' ? 2_678_400 : 86400, Math.ceil(quota.retry_after))) : 60;
+      if (reason === 'period_quota') {
+        return fail(429, 'Das Kontingent deines Abos für diesen Zeitraum ist aufgebraucht.', retry);
+      }
       return fail(429, 'Das Nutzungslimit wurde erreicht oder es läuft bereits eine Generierung. Bitte später erneut versuchen.', retry);
     }
     reservation = requestId;

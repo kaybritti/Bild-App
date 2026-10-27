@@ -4,6 +4,14 @@
  */
 export const GENERATE_ENDPOINT = '/api/generate';
 
+/** Serverfunktion (api/billing.ts) für Abo-Status, Stripe Checkout und Kundenportal. */
+export const BILLING_ENDPOINT = '/api/billing';
+
+/** Anzeige des Abos. Muss zum Preis mit Lookup-Key „studio_monthly“ in Stripe passen. */
+export const PLAN_PRICE_LABEL = '9,90 €';
+export const PLAN_MONTHLY_IMAGES = 100;
+export const PLAN_TRIAL_DAYS = 7;
+
 /** Supabase (Login). Beide Werte sind öffentlich und landen im Browser-Bundle. */
 export const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL?.trim() ?? '';
 export const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim() ?? '';

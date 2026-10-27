@@ -1,9 +1,12 @@
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { MAX_FILE_SIZE_MB } from '../config';
+import { useBilling } from '../hooks/useBilling';
 import { useGeneration } from '../hooks/useGeneration';
 import { useImageFile } from '../hooks/useImageFile';
+import { isEntitled } from '../services/billingService';
 import { GenerateButton } from './GenerateButton';
 import { ImageUploadCard } from './ImageUploadCard';
+import { PlanPanel } from './PlanPanel';
 import { PrivacyNotice } from './PrivacyNotice';
 import { ResultPanel } from './ResultPanel';
 
@@ -18,12 +21,30 @@ export function Studio() {
   const person = useImageFile();
   const garment = useImageFile();
   const { state, generate, reset } = useGeneration();
+  const billing = useBilling();
   const resultRef = useRef<HTMLElement>(null);
+
+  // Jeder Versuch zählt zum Kontingent – danach den Stand neu laden.
+  const { refresh: refreshBilling } = billing;
+  const finished = state.status === 'success' || state.status === 'error';
+  useEffect(() => {
+    if (finished) refreshBilling();
+  }, [finished, refreshBilling]);
 
   const isLoading = state.status === 'loading';
   const hasBothImages = person.image !== null && garment.image !== null;
   const isPreparing = person.processing || garment.processing;
-  const canGenerate = hasBothImages && !isLoading && !isPreparing;
+  // Der Server prüft das Abo ohnehin; ist der Status nicht ladbar, entscheidet er.
+  const plan = billing.state.status === 'ready' ? billing.state.billing : null;
+  const planBlock =
+    billing.state.status === 'loading'
+      ? 'Abo wird geladen'
+      : plan && !isEntitled(plan)
+        ? 'Für die Generierung ist ein Abo nötig'
+        : plan && plan.used >= plan.allowance
+          ? 'Kontingent für diesen Monat aufgebraucht'
+          : null;
+  const canGenerate = hasBothImages && !isLoading && !isPreparing && !planBlock;
 
   const handleGenerate = () => {
     if (!person.image || !garment.image || !canGenerate) return;
@@ -57,6 +78,18 @@ export function Studio() {
         <p className="mt-5 max-w-md text-sm leading-relaxed text-stone-dark sm:text-base">
           Lade ein Foto einer Person und ein Kleidungsstück hoch. Der Workflow kombiniert beides zu einem neuen Bild.
         </p>
+      </section>
+
+      <section aria-label="Abo" className="mb-12 sm:mb-16">
+        <PlanPanel
+          state={billing.state}
+          confirming={billing.confirming}
+          redirecting={billing.redirecting}
+          actionError={billing.actionError}
+          onCheckout={billing.checkout}
+          onManage={billing.manage}
+          onRetry={billing.refresh}
+        />
       </section>
 
       <section aria-labelledby="upload-heading">
@@ -105,9 +138,11 @@ export function Studio() {
             ? 'Bitte warten – die Anfrage läuft'
             : isPreparing
               ? 'Bild wird vorbereitet'
-              : hasBothImages
-                ? 'Bereit zur Generierung'
-                : 'Lade Bild1 und Bild2 hoch, um zu starten'}
+              : planBlock
+                ? planBlock
+                : hasBothImages
+                  ? 'Bereit zur Generierung'
+                  : 'Lade Bild1 und Bild2 hoch, um zu starten'}
         </p>
         <PrivacyNotice />
       </section>

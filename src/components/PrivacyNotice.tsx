@@ -7,7 +7,7 @@ export function PrivacyNotice() {
       <span>
         Deine Fotos werden zur Verarbeitung an einen externen Dienst (n8n-Workflow) übertragen. Die App selbst speichert
         keine Bilder. Bildmetadaten werden vor der Weitergabe entfernt. Für den Missbrauchsschutz werden Nutzer-ID und
-        Anfragezeiten vorübergehend gespeichert.
+        Anfragezeiten vorübergehend gespeichert. Zahlungen wickelt Stripe ab; die App sieht keine Kartendaten.
       </span>
     </p>
   );
