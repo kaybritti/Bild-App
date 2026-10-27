@@ -18,3 +18,7 @@ export function buildDownloadName(mimeType: SupportedMimeType, date: Date): stri
     `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
   return `ai-image-studio-${stamp}.${mimeType === 'image/webp' ? 'webp' : 'jpg'}`;
 }
+
+export function formatDate(date: Date): string {
+  return date.toLocaleDateString('de-DE', { day: 'numeric', month: 'long', year: 'numeric' });
+}

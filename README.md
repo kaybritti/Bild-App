@@ -96,6 +96,59 @@ Gespeichert werden ausschließlich Nutzer-ID, Anfrage-ID und Zeiten; alte Eintr�
 bei weiteren Reservierungen bereinigt (aktueller und vorheriger UTC-Tag). Ohne weitere
 Anfragen bleiben sie bis zur nächsten Bereinigung bestehen. Bilder werden dort nicht gespeichert.
 
+## Abo (Stripe)
+
+Generieren ist nur mit aktivem Abo möglich: **9,90 € / Monat inkl. USt., 100 Bilder pro
+Abrechnungszeitraum, 7 Tage kostenlos testen** (Karte wird beim Start hinterlegt).
+Bezahlt wird über Stripe Checkout (von Stripe gehostet), verwaltet über das Stripe-Kundenportal
+(Kündigung zum Periodenende, Zahlungsmethode, Rechnungen). Die App sieht keine Kartendaten.
+
+| Baustein | Aufgabe |
+|---|---|
+| `api/billing.ts` | `GET`: Abo-Status für die Oberfläche. `POST {action: "checkout" \| "portal"}`: Stripe-URL |
+| `api/stripe-webhook.ts` | Prüft die Stripe-Signatur, lädt das Abo frisch über die API und speichert es in Supabase |
+| `supabase/migrations/202610200002_subscriptions.sql` | Tabelle `private.subscriptions`, RPCs, Abo-Prüfung in `reserve_generation` |
+
+In Stripe angelegt (Sandbox „Britti Sandbox“):
+
+- Produkt **AI Image Studio – Monatsabo** (`prod_VTWtKl2jdJqfzv`), Steuercode SaaS (`txcd_10103000`)
+- Preis 9,90 € monatlich, inkl. Steuer, Lookup-Key **`studio_monthly`** (`price_1USZpd9D41wMRh5wvQvyGTUY`),
+  Metadaten `monthly_generations=100` (der Webhook übernimmt daraus das Kontingent)
+- Kundenportal-Konfiguration (Kündigung zum Periodenende mit Grund, Zahlungsmethode, Rechnungen)
+
+Die App sucht den Preis über den Lookup-Key. Für den Livebetrieb Produkt und Preis im
+Live-Modus genauso anlegen (gleicher Lookup-Key und gleiche Metadaten).
+
+### Einrichtung
+
+1. Migration `supabase/migrations/202610200002_subscriptions.sql` nach `…0001` einspielen.
+   **Ab dann braucht jede Generierung ein Abo**, auch für bestehende Konten.
+2. `STRIPE_SECRET_KEY` (am besten Restricted Key, Rechte siehe `.env.example`) lokal in
+   `.env.local` und bei Vercel hinterlegen.
+3. Webhook-Endpunkt in Stripe anlegen: URL `https://<app>/api/stripe-webhook`, Ereignisse
+   `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`,
+   `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`. Das Signing Secret
+   als `STRIPE_WEBHOOK_SECRET` bei Vercel hinterlegen.
+4. Stripe Tax: im Dashboard die Unternehmensadresse und die Steuerregistrierung (Deutschland,
+   ggf. EU-OSS) eintragen; sonst bricht Checkout mit `automatic_tax` ab.
+5. Lokal testen: `stripe listen --forward-to localhost:5173/api/stripe-webhook`, das ausgegebene
+   `whsec_…` in `.env.local` eintragen, Dev-Server neu starten, Testkarte `4242 4242 4242 4242`.
+
+### Regeln
+
+| Regel | Wert |
+|---|---:|
+| Kontingent pro bezahltem Abrechnungszeitraum | 100 (Preis-Metadaten `monthly_generations`) |
+| Kontingent in der Testphase | 20 (`private.generation_limits.trial_quota`) |
+| Testphase | 7 Tage, nur einmal pro Konto |
+| Erlaubte Status | `active`, `trialing` (bei `past_due` wird gesperrt) |
+
+Jeder reservierte Versuch zählt zum Kontingent, auch ein fehlgeschlagener (wie bei den
+Tageslimits). Die Tages-, Abstands- und Parallelitätsgrenzen gelten zusätzlich weiter.
+Ein Nutzer hat genau einen Stripe-Kunden; ein zweites laufendes Abo lehnt die API ab (HTTP 409).
+Ohne Abo antwortet `api/generate.ts` mit HTTP 402, bei aufgebrauchtem Kontingent mit HTTP 429
+und `Retry-After` bis zum Periodenende.
+
 ## Konten schützen (Supabase- und Vercel-Dashboard)
 
 Diese Einstellungen liegen außerhalb des Codes und müssen im Dashboard gesetzt werden:

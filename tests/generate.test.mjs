@@ -118,6 +118,18 @@ test('quota rejection has Retry-After and avoids decoding or dispatch', async ()
   assert.equal(released(), false);
 });
 
+test('missing subscription is 402; used-up period quota is 429 until the period ends', async () => {
+  quotaReply = () => Response.json({ allowed: false, reason: 'subscription' });
+  const missing = await POST(request());
+  assert.equal(missing.status, 402);
+  assert.match((await missing.json()).error, /Abo/);
+  quotaReply = () => Response.json({ allowed: false, reason: 'period_quota', retry_after: 12 * 86400 });
+  const used = await POST(request());
+  assert.equal(used.status, 429);
+  assert.equal(used.headers.get('retry-after'), String(12 * 86400));
+  assert.equal(dispatched().length, 0);
+});
+
 test('missing, duplicate, extra and text fields are rejected', async () => {
   for (const fields of [['Bild1'], ['Bild1', 'Bild1'], ['Bild1', 'Bild2', 'extra'], ['Bild1', 'wrong']]) {
     const form = new FormData();
